@@ -22,6 +22,7 @@ export interface GameEvent {
   text: string;
   privateTo?: string;
   reveal?: Card[];
+  revealTitle?: string;
   kind?: 'normal' | 'taunt' | 'system';
 }
 
@@ -52,6 +53,7 @@ export interface GameState {
   scholarCandidates: Card[];
   skipNextId: string | null;
   endAfterResolution: boolean;
+  rankSixPlayed: number;
   events: GameEvent[];
   result: GameResult | null;
 }
@@ -245,7 +247,7 @@ function prepareDiscardEffect(
   state.pendingEffect = { kind, actorId: actor.id, targetId: target.id, blockReincarnation };
   state.phase = 'resolve';
   if (kind === 'public-execution') {
-    log(state, `${target.name}の手札が公開された。`, { reveal: copy(target.hand) });
+    log(state, `${target.name}の手札が公開された。`, { reveal: copy(target.hand), revealTitle: '公開処刑' });
   }
 }
 
@@ -276,7 +278,7 @@ export function createGame(
   const state: GameState = {
     id: crypto.randomUUID(), version: 1, players, deck, discard: [], reincarnationCard,
     turnIndex: 0, turnNumber: 1, phase: 'draw', pendingEffect: null,
-    scholarCandidates: [], skipNextId: null, endAfterResolution: false, events: [], result: null,
+    scholarCandidates: [], skipNextId: null, endAfterResolution: false, rankSixPlayed: 0, events: [], result: null,
   };
   log(state, '夜会が始まった。最初の一枚を引いてください。', { kind: 'system' });
   return state;
@@ -418,7 +420,7 @@ export function playCard(
     }
     case 3: {
       const target = guardedTarget();
-      if (target) log(state, `${target.name}の手札は${target.hand[0]?.rank ?? 'なし'}。`, { privateTo: actor.id, reveal: copy(target.hand) });
+      if (target) log(state, `${target.name}の手札は${target.hand[0]?.rank ?? 'なし'}。`, { privateTo: actor.id, reveal: copy(target.hand), revealTitle: '透視' });
       finishTurn(state);
       break;
     }
@@ -439,15 +441,16 @@ export function playCard(
         const targetRank = target.hand[0]?.rank ?? 0;
         const ownHand = copy(actor.hand);
         const targetHand = copy(target.hand);
-        const isDuel = state.discard.filter((item) => item.rank === 6).length % 2 === 0;
+        state.rankSixPlayed = Math.max((state.rankSixPlayed ?? 0) + 1, state.discard.filter((item) => item.rank === 6).length);
+        const isDuel = state.rankSixPlayed >= 2;
         if (isDuel) {
           if (ownRank < targetRank) eliminate(state, actor);
           else if (targetRank < ownRank) eliminate(state, target);
-          else { eliminate(state, actor); eliminate(state, target); }
+          else log(state, '対決は引き分け。勝負はそのまま続く。');
         }
         const mode = isDuel ? '対決' : '対面';
-        log(state, `${mode}：${target.name}の手札は${targetRank}。`, { privateTo: actor.id, reveal: targetHand });
-        log(state, `${mode}：${actor.name}の手札は${ownRank}。`, { privateTo: target.id, reveal: ownHand });
+        log(state, `${mode}：${target.name}の手札は${targetRank}。`, { privateTo: actor.id, reveal: targetHand, revealTitle: mode });
+        log(state, `${mode}：${actor.name}の手札は${ownRank}。`, { privateTo: target.id, reveal: ownHand, revealTitle: mode });
       }
       finishTurn(state);
       break;
@@ -557,7 +560,7 @@ export const CARD_DESCRIPTIONS: Record<number, string> = {
   3: 'ひとりの手札を自分だけが見る。',
   4: '次の実際の手番まで効果を受けない。',
   5: '相手に一枚引かせ、見ずに一枚を捨てる。',
-  6: '奇数枚目は密かに手札を見せ合い、偶数枚目は小さい方が脱落する。',
+  6: '一枚目は密かに手札を見せ合う。二枚目以降は対決し、小さい方が脱落。同値なら続行。',
   7: '次の自分の手番で三枚から一枚を選べる。',
   8: 'ひとりと手札を交換する。',
   9: '相手の二枚を公開し、一枚を処刑する。',

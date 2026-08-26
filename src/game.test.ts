@@ -121,15 +121,40 @@ describe('game engine', () => {
     expect(projectForPlayer(next, 'player-1').events.at(-1)?.text).toBe('対決：Bの手札は4。');
   });
 
-  it('eliminates both players when the second rank 6 duel is tied', () => {
+  it('continues without elimination when a rank 6 duel is tied', () => {
     const game = base();
     game.phase = 'action';
     game.discard = [card(6, 'first')];
     game.players[0].hand = [card(6), card(8, 'actor')];
     game.players[1].hand = [card(8, 'target')];
     const next = playCard(game, 'player-1', '6-x', { targetId: 'player-2' }, fixed);
-    expect(next.players[0].eliminated).toBe(true);
+    expect(next.players[0].eliminated).toBe(false);
+    expect(next.players[1].eliminated).toBe(false);
+    expect(next.events.some((event) => event.text === '対決は引き分け。勝負はそのまま続く。')).toBe(true);
+  });
+
+  it('uses every rank 6 after the first for a duel', () => {
+    const game = base();
+    game.phase = 'action';
+    game.discard = [card(6, 'first'), card(6, 'second')];
+    game.players[0].hand = [card(6), card(9, 'actor')];
+    game.players[1].hand = [card(4, 'target')];
+    const next = playCard(game, 'player-1', '6-x', { targetId: 'player-2' }, fixed);
+    expect(next.players[0].eliminated).toBe(false);
     expect(next.players[1].eliminated).toBe(true);
+    expect(projectForPlayer(next, 'player-1').events.at(-1)?.revealTitle).toBe('対決');
+  });
+
+  it('remembers that rank 6 has appeared even after the grave is recycled', () => {
+    const game = base();
+    game.phase = 'action';
+    game.rankSixPlayed = 2;
+    game.discard = [];
+    game.players[0].hand = [card(6), card(9, 'actor')];
+    game.players[1].hand = [card(4, 'target')];
+    const next = playCard(game, 'player-1', '6-x', { targetId: 'player-2' }, fixed);
+    expect(next.players[1].eliminated).toBe(true);
+    expect(next.rankSixPlayed).toBe(3);
   });
 
   it('prevents rank 13 reincarnation under rank 9', () => {

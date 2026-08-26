@@ -111,8 +111,21 @@ const secondSix = await invoke(guest, {
   action: 'command', code: duelRoom.code, commandId: crypto.randomUUID(), expectedVersion: guestDraw.view.version,
   command: { type: 'play', cardId: guestSix.id, choices: { targetId: duelRoom.playerId } },
 });
-if (!secondSix.view.players.every((player) => player.eliminated) || !secondSix.view.events.at(-1)?.text.startsWith('対決：')) {
-  throw new Error('The second tied rank 6 did not eliminate both players');
+if (secondSix.view.players.some((player) => player.eliminated) || !secondSix.view.events.at(-1)?.text.startsWith('対決：')) {
+  throw new Error('The second tied rank 6 did not continue without elimination');
+}
+const hostThirdView = await invoke(host, { action: 'snapshot', code: duelRoom.code });
+const hostThirdDraw = await invoke(host, {
+  action: 'command', code: duelRoom.code, commandId: crypto.randomUUID(), expectedVersion: hostThirdView.view.version,
+  command: { type: 'draw', choice: 'one' },
+});
+const hostThirdSix = hostThirdDraw.view.players.find((player) => player.id === duelRoom.playerId)?.ownHand?.[0];
+const thirdSix = await invoke(host, {
+  action: 'command', code: duelRoom.code, commandId: crypto.randomUUID(), expectedVersion: hostThirdDraw.view.version,
+  command: { type: 'play', cardId: hostThirdSix.id, choices: { targetId: duelGuest.playerId } },
+});
+if (thirdSix.view.players.some((player) => player.eliminated) || !thirdSix.view.events.filter((event) => event.reveal?.length).at(-1)?.text.startsWith('対決：')) {
+  throw new Error('A rank 6 after the second did not resolve as a duel');
 }
 
 console.log(`Online smoke test passed (rooms ${created.code}/${duelRoom.code}, version ${played.view.version})`);
