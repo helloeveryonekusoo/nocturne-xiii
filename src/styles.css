@@ -106,7 +106,7 @@ h1 em { color:var(--gold); font-style:normal; }
 .toast { position:fixed; left:50%; bottom:24px; z-index:120; transform:translateX(-50%); background:#ece3ce; color:#17120a; padding:12px 18px; box-shadow:0 10px 40px rgba(0,0,0,.5); font-size:11px; }
 
 @media (max-width:900px) {
-  .hero { grid-template-columns:1fr; padding-top:64px; text-align:center; }.hero-copy{margin:auto}.eyebrow{justify-content:center}.lead{margin-left:auto;margin-right:auto}.name-field,.room-panel{margin-left:auto;margin-right:auto}.table-preview{min-height:500px;max-width:620px;width:100%;margin:-25px auto 0}
+  .hero { grid-template-columns:minmax(0,1fr); padding-top:64px; text-align:center; }.hero-copy{margin:auto}.eyebrow{justify-content:center}.lead{margin-left:auto;margin-right:auto}.name-field,.room-panel{margin-left:auto;margin-right:auto}.table-preview{min-height:500px;max-width:620px;width:100%;margin:-25px auto 0}
   .lobby-layout { grid-template-columns:1fr; gap:30px; padding-top:48px; }.setup-panel { max-width:none; }
   .game-shell { grid-template-rows:64px minmax(0,1fr) 250px; }.game-header{height:64px}.opponents{justify-content:flex-start;overflow-x:auto;padding-bottom:5px}.opponent{min-width:145px}.board-center{inset:90px 5% 35px;grid-template-columns:78px 1fr 78px;gap:12px}.pile{min-height:105px}.hand-dock{grid-template-columns:100px 1fr 180px;padding:12px 14px}.self-label .avatar{display:none}.hand-cards .card-face{width:126px;height:196px}.hand-cards .card-copy{display:none}.hand-cards .card-sigil{margin:22px 0 28px}
 }
