@@ -58,6 +58,7 @@ export default function App() {
   const [counts, setCounts] = useState<CardCounts>({ ...STARTER_COUNTS });
   const [presets, setPresets] = useState<SavedPreset[]>(readPresets);
   const [selectedPreset, setSelectedPreset] = useState('');
+  const [presetName, setPresetName] = useState('');
   const [game, setGame] = useState<GameState | null>(null);
   const [onlineView, setOnlineView] = useState<PlayerView | null>(null);
   const [lobby, setLobby] = useState<LobbySnapshot | null>(null);
@@ -71,6 +72,7 @@ export default function App() {
   const [taunt, setTaunt] = useState(false);
   const [busy, setBusy] = useState(false);
   const lastTaunt = useRef<string | null>(null);
+  const editingCounts = useRef(false);
 
   const previewPlayers = useMemo(() => [name || '旅人', 'KIRI', 'AO'].slice(0, Math.min(maxPlayers, 3)), [name, maxPlayers]);
   const players = onlineConfigured && lobby
@@ -85,7 +87,7 @@ export default function App() {
     if (snapshot.lobby) {
       setLobby(snapshot.lobby);
       setMaxPlayers(snapshot.lobby.maxPlayers);
-      setCounts({ ...snapshot.lobby.counts });
+      if (!editingCounts.current) setCounts({ ...snapshot.lobby.counts });
       setOnlineView(null);
       setScreen('lobby');
     } else if (snapshot.view) {
@@ -248,15 +250,37 @@ export default function App() {
   };
 
   const savePreset = () => {
-    const presetName = window.prompt('この構成の名前', '新しい夜会');
-    if (!presetName?.trim()) return;
-    const next = [...presets, { id: id(), name: presetName.trim(), counts: { ...counts } }];
+    const cleanName = presetName.trim();
+    if (!cleanName) return flash('保存する構成名を入力してください');
+    const next = [...presets, { id: id(), name: cleanName, counts: { ...counts } }];
     setPresets(next); writePresets(next); setSelectedPreset(next.at(-1)!.id);
+    setPresetName('');
     flash('構成を保存しました');
   };
 
   const updateCount = (rank: number, delta: number) => {
     setCounts((current) => ({ ...current, [rank]: Math.max(0, Math.min(20, (current[rank] ?? 0) + delta)) }));
+  };
+
+  const openSettings = () => {
+    editingCounts.current = true;
+    setPresetName('');
+    setSettingsOpen(true);
+  };
+
+  const closeSettings = () => {
+    editingCounts.current = false;
+    setSettingsOpen(false);
+    if (onlineConfigured && lobby) setCounts({ ...lobby.counts });
+  };
+
+  const applySettings = async () => {
+    setSettingsOpen(false);
+    try {
+      await configureOnlineRoom();
+    } finally {
+      editingCounts.current = false;
+    }
   };
 
   const chooseCard = (card: Card) => {
@@ -362,7 +386,7 @@ export default function App() {
               </div>
             </section>
             <aside className="setup-panel">
-              <div className="panel-heading"><div><small>DECK SETTING</small><h3>カード構成</h3></div>{(!onlineConfigured || lobby?.isHost) && <button onClick={() => setSettingsOpen(true)}>詳しく編集</button>}</div>
+              <div className="panel-heading"><div><small>DECK SETTING</small><h3>カード構成</h3></div>{(!onlineConfigured || lobby?.isHost) && <button onClick={openSettings}>詳しく編集</button>}</div>
               <div className="deck-summary">{Array.from({ length: 13 }, (_, index) => index + 1).map((rank) => <div key={rank}><span>{rank}</span><strong>×{counts[rank]}</strong></div>)}</div>
               <div className="summary-row"><span>合計枚数</span><strong>{Object.values(counts).reduce((a, b) => a + b, 0)}枚</strong></div>
               <label className="player-limit">上限人数<select value={maxPlayers} disabled={onlineConfigured && !lobby?.isHost} onChange={(event) => { const next = Number(event.target.value); setMaxPlayers(next); void configureOnlineRoom(next, counts); }}>{[2,3,4,5].map((value) => <option key={value}>{value}</option>)}</select></label>
@@ -411,7 +435,7 @@ export default function App() {
 
       {targeting && view && <div className="modal-backdrop"><div className="choice-modal target-modal"><small>TARGET</small><h3>「{CARD_NAMES[targeting.rank]}」の対象</h3><div className="target-list">{view.players.filter((player) => player.id !== playerId && !player.eliminated).map((player) => <button className={selectedTarget === player.id ? 'selected' : ''} key={player.id} onClick={() => setSelectedTarget(player.id)}><span className="avatar">{player.name.slice(0,1)}</span><strong>{player.name}</strong><span>選択</span></button>)}</div>{targeting.rank === 2 && <label className="guess-field">宣言する階位<select value={guess} onChange={(event) => setGuess(Number(event.target.value))}>{Array.from({ length: 13 }, (_, index) => index + 1).map((rank) => <option key={rank}>{rank}</option>)}</select></label>}<div className="modal-actions"><button className="ghost-button" onClick={() => setTargeting(null)}>戻る</button><button className="primary-button" disabled={!selectedTarget || busy} onClick={confirmTarget}>効果を使う</button></div></div></div>}
 
-      {settingsOpen && <div className="modal-backdrop"><div className="settings-modal"><div className="modal-heading"><div><small>DECK ARCHIVE</small><h3>カード構成を編集</h3></div><button onClick={() => setSettingsOpen(false)}>×</button></div><div className="preset-bar"><select value={selectedPreset} onChange={(event) => { setSelectedPreset(event.target.value); const preset = presets.find((item) => item.id === event.target.value); if (preset) setCounts({ ...preset.counts }); }}><option value="">保存した構成を選択</option>{presets.map((preset) => <option value={preset.id} key={preset.id}>{preset.name}</option>)}</select><button onClick={savePreset}>名前を付けて保存</button></div><div className="count-editor">{Array.from({ length: 13 }, (_, index) => index + 1).map((rank) => <div key={rank}><span className="mini-sigil">{SIGILS[rank]}</span><label><strong>{rank}</strong><small>{CARD_NAMES[rank]}</small></label><div className="stepper"><button onClick={() => updateCount(rank, -1)}>−</button><input type="number" min="0" max="20" value={counts[rank]} onChange={(event) => setCounts((current) => ({ ...current, [rank]: Math.max(0, Math.min(20, Number(event.target.value) || 0)) }))} /><button onClick={() => updateCount(rank, 1)}>＋</button></div></div>)}</div><div className="settings-footer"><div><strong>合計 {Object.values(counts).reduce((a,b) => a+b,0)}枚</strong><small>{validateCounts(counts, players.length) || 'この構成で開始できます'}</small></div><div className="preset-actions">{selectedPreset && <><button onClick={() => { const preset = presets.find((item) => item.id === selectedPreset); if (preset) exportPreset(preset); }}>書き出す</button><button onClick={() => { const next = presets.filter((item) => item.id !== selectedPreset); setPresets(next); writePresets(next); setSelectedPreset(''); }}>削除</button></>}<button className="primary-button" onClick={() => { setSettingsOpen(false); void configureOnlineRoom(); }}>構成を適用</button></div></div></div></div>}
+      {settingsOpen && <div className="modal-backdrop"><div className="settings-modal"><div className="modal-heading"><div><small>DECK ARCHIVE</small><h3>カード構成を編集</h3></div><button onClick={closeSettings}>×</button></div><div className="preset-bar"><select value={selectedPreset} onChange={(event) => { setSelectedPreset(event.target.value); const preset = presets.find((item) => item.id === event.target.value); if (preset) setCounts({ ...preset.counts }); }}><option value="">保存した構成を選択</option>{presets.map((preset) => <option value={preset.id} key={preset.id}>{preset.name}</option>)}</select><input className="preset-name" aria-label="保存する構成名" maxLength={24} placeholder="構成名を入力" value={presetName} onChange={(event) => setPresetName(event.target.value)} /><button onClick={savePreset} disabled={!presetName.trim()}>名前を付けて保存</button></div><div className="count-editor">{Array.from({ length: 13 }, (_, index) => index + 1).map((rank) => <div key={rank}><span className="mini-sigil">{SIGILS[rank]}</span><label><strong>{rank}</strong><small>{CARD_NAMES[rank]}</small></label><div className="stepper"><button onClick={() => updateCount(rank, -1)}>−</button><input type="number" min="0" max="20" value={counts[rank]} onChange={(event) => setCounts((current) => ({ ...current, [rank]: Math.max(0, Math.min(20, Number(event.target.value) || 0)) }))} /><button onClick={() => updateCount(rank, 1)}>＋</button></div></div>)}</div><div className="settings-footer"><div><strong>合計 {Object.values(counts).reduce((a,b) => a+b,0)}枚</strong><small>{validateCounts(counts, players.length) || 'この構成で開始できます'}</small></div><div className="preset-actions">{selectedPreset && <><button onClick={() => { const preset = presets.find((item) => item.id === selectedPreset); if (preset) exportPreset(preset); }}>書き出す</button><button onClick={() => { const next = presets.filter((item) => item.id !== selectedPreset); setPresets(next); writePresets(next); setSelectedPreset(''); }}>削除</button></>}<button className="primary-button" onClick={() => void applySettings()}>構成を適用</button></div></div></div></div>}
 
       {rulesOpen && <div className="rules-backdrop" onClick={() => setRulesOpen(false)}><aside className="rules-drawer" onClick={(event) => event.stopPropagation()}><div className="modal-heading"><div><small>RULE BOOK</small><h3>13階位の効果</h3></div><button onClick={() => setRulesOpen(false)}>×</button></div><p className="rules-intro">一枚引き、一枚を使う。山札が尽きれば、最後に持つ階位が最も高い者の勝利。</p><div className="rule-list">{Array.from({ length: 13 }, (_, index) => index + 1).map((rank) => <article key={rank}><span>{rank}</span><div><strong>{CARD_NAMES[rank]}</strong><p>{CARD_DESCRIPTIONS[rank]}</p></div><i>{SIGILS[rank]}</i></article>)}</div></aside></div>}
       {taunt && <div className="taunt-screen" role="status"><span>忘れてやーんの</span></div>}

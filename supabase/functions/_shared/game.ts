@@ -437,10 +437,17 @@ export function playCard(
       if (target) {
         const ownRank = actor.hand[0]?.rank ?? 0;
         const targetRank = target.hand[0]?.rank ?? 0;
-        log(state, `${actor.name}と${target.name}が互いの手札を見せ合った。`, { privateTo: actor.id, reveal: copy([...actor.hand, ...target.hand]) });
-        if (ownRank < targetRank) eliminate(state, actor);
-        else if (targetRank < ownRank) eliminate(state, target);
-        else { eliminate(state, actor); eliminate(state, target); }
+        const ownHand = copy(actor.hand);
+        const targetHand = copy(target.hand);
+        const isDuel = state.discard.filter((item) => item.rank === 6).length % 2 === 0;
+        if (isDuel) {
+          if (ownRank < targetRank) eliminate(state, actor);
+          else if (targetRank < ownRank) eliminate(state, target);
+          else { eliminate(state, actor); eliminate(state, target); }
+        }
+        const mode = isDuel ? '対決' : '対面';
+        log(state, `${mode}：${target.name}の手札は${targetRank}。`, { privateTo: actor.id, reveal: targetHand });
+        log(state, `${mode}：${actor.name}の手札は${ownRank}。`, { privateTo: target.id, reveal: ownHand });
       }
       finishTurn(state);
       break;
@@ -540,7 +547,7 @@ export function projectForPlayer(state: GameState, viewerId: string): PlayerView
 }
 
 export const CARD_NAMES: Record<number, string> = {
-  1: '革命', 2: '捜査', 3: '透視', 4: '静寂', 5: '疫病', 6: '対決', 7: '選択',
+  1: '革命', 2: '捜査', 3: '透視', 4: '静寂', 5: '疫病', 6: '対面・対決', 7: '選択',
   8: '交換', 9: '公開処刑', 10: '強制転生', 11: '跳躍', 12: '全体転生', 13: '潜伏・転生',
 };
 
@@ -550,7 +557,7 @@ export const CARD_DESCRIPTIONS: Record<number, string> = {
   3: 'ひとりの手札を自分だけが見る。',
   4: '次の実際の手番まで効果を受けない。',
   5: '相手に一枚引かせ、見ずに一枚を捨てる。',
-  6: '手札を見せ合い、小さい方が脱落する。',
+  6: '奇数枚目は密かに手札を見せ合い、偶数枚目は小さい方が脱落する。',
   7: '次の自分の手番で三枚から一枚を選べる。',
   8: 'ひとりと手札を交換する。',
   9: '相手の二枚を公開し、一枚を処刑する。',

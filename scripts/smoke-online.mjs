@@ -81,4 +81,38 @@ if (guestAfterPlay.view.players.find((player) => player.id === created.playerId)
   throw new Error('Another player hand was exposed');
 }
 
-console.log(`Online smoke test passed (room ${created.code}, version ${played.view.version})`);
+const duelCounts = Object.fromEntries(Array.from({ length: 13 }, (_, index) => [index + 1, index === 5 ? 6 : 0]));
+const duelRoom = await invoke(host, { action: 'create_room', name: 'HOST', maxPlayers: 2, counts: duelCounts });
+const duelGuest = await invoke(guest, { action: 'join_room', name: 'GUEST', code: duelRoom.code });
+const duelLobby = await invoke(host, { action: 'snapshot', code: duelRoom.code });
+const duelStart = await invoke(host, {
+  action: 'command', code: duelRoom.code, commandId: crypto.randomUUID(), expectedVersion: duelLobby.lobby.version,
+  command: { type: 'start', counts: duelCounts, maxPlayers: 2 },
+});
+const hostDraw = await invoke(host, {
+  action: 'command', code: duelRoom.code, commandId: crypto.randomUUID(), expectedVersion: duelStart.view.version,
+  command: { type: 'draw', choice: 'one' },
+});
+const hostSix = hostDraw.view.players.find((player) => player.id === duelRoom.playerId)?.ownHand?.[0];
+const firstSix = await invoke(host, {
+  action: 'command', code: duelRoom.code, commandId: crypto.randomUUID(), expectedVersion: hostDraw.view.version,
+  command: { type: 'play', cardId: hostSix.id, choices: { targetId: duelGuest.playerId } },
+});
+if (firstSix.view.players.some((player) => player.eliminated) || !firstSix.view.events.at(-1)?.text.startsWith('対面：')) {
+  throw new Error('The first rank 6 did not resolve as a private face-to-face reveal');
+}
+const guestDuelView = await invoke(guest, { action: 'snapshot', code: duelRoom.code });
+const guestDraw = await invoke(guest, {
+  action: 'command', code: duelRoom.code, commandId: crypto.randomUUID(), expectedVersion: guestDuelView.view.version,
+  command: { type: 'draw', choice: 'one' },
+});
+const guestSix = guestDraw.view.players.find((player) => player.id === duelGuest.playerId)?.ownHand?.[0];
+const secondSix = await invoke(guest, {
+  action: 'command', code: duelRoom.code, commandId: crypto.randomUUID(), expectedVersion: guestDraw.view.version,
+  command: { type: 'play', cardId: guestSix.id, choices: { targetId: duelRoom.playerId } },
+});
+if (!secondSix.view.players.every((player) => player.eliminated) || !secondSix.view.events.at(-1)?.text.startsWith('対決：')) {
+  throw new Error('The second tied rank 6 did not eliminate both players');
+}
+
+console.log(`Online smoke test passed (rooms ${created.code}/${duelRoom.code}, version ${played.view.version})`);

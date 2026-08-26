@@ -96,6 +96,42 @@ describe('game engine', () => {
     expect(next.events.at(-1)?.text).not.toContain('守護');
   });
 
+  it('uses the first rank 6 for a private face-to-face reveal without elimination', () => {
+    const game = base();
+    game.phase = 'action';
+    game.players[0].hand = [card(6), card(9, 'actor')];
+    game.players[1].hand = [card(4, 'target')];
+    const next = playCard(game, 'player-1', '6-x', { targetId: 'player-2' }, fixed);
+    expect(next.players[0].eliminated).toBe(false);
+    expect(next.players[1].eliminated).toBe(false);
+    expect(projectForPlayer(next, 'player-1').events.at(-1)?.text).toBe('対面：Bの手札は4。');
+    expect(projectForPlayer(next, 'player-2').events.at(-1)?.text).toBe('対面：Aの手札は9。');
+    expect(projectForPlayer(next, 'player-3').events.some((event) => event.text.includes('手札は'))).toBe(false);
+  });
+
+  it('uses the second rank 6 for a duel and eliminates the lower hand', () => {
+    const game = base();
+    game.phase = 'action';
+    game.discard = [card(6, 'first')];
+    game.players[0].hand = [card(6), card(9, 'actor')];
+    game.players[1].hand = [card(4, 'target')];
+    const next = playCard(game, 'player-1', '6-x', { targetId: 'player-2' }, fixed);
+    expect(next.players[0].eliminated).toBe(false);
+    expect(next.players[1].eliminated).toBe(true);
+    expect(projectForPlayer(next, 'player-1').events.at(-1)?.text).toBe('対決：Bの手札は4。');
+  });
+
+  it('eliminates both players when the second rank 6 duel is tied', () => {
+    const game = base();
+    game.phase = 'action';
+    game.discard = [card(6, 'first')];
+    game.players[0].hand = [card(6), card(8, 'actor')];
+    game.players[1].hand = [card(8, 'target')];
+    const next = playCard(game, 'player-1', '6-x', { targetId: 'player-2' }, fixed);
+    expect(next.players[0].eliminated).toBe(true);
+    expect(next.players[1].eliminated).toBe(true);
+  });
+
   it('prevents rank 13 reincarnation under rank 9', () => {
     const game = base();
     game.phase = 'action';
