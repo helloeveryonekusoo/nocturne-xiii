@@ -204,7 +204,6 @@ export default function App() {
           : await onlineApi.joinRoom(cleanName, joinCode);
         setRoomCode(result.code);
         setPlayerId(result.playerId);
-        setScreen('lobby');
         acceptSnapshot(await onlineApi.snapshot(result.code));
       } else {
         setRoomCode(mode === 'join' ? joinCode : String(Math.floor(1000 + Math.random() * 9000)));
