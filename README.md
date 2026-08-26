@@ -58,6 +58,12 @@ npm test
 npm run build
 ```
 
+公開済みのSupabaseに対して、匿名ログイン、2人入室、ロビー構成同期、開始、ドロー、カード使用、非公開情報の保護をまとめて確認できます。
+
+```bash
+SUPABASE_URL=... SUPABASE_PUBLISHABLE_KEY=... npm run test:online
+```
+
 ## セキュリティ設計
 
 - 4桁コードは部屋を探すための値であり、認証情報ではありません。
@@ -95,8 +101,9 @@ DRAW ── 1枚引く ───────────────→ ACTION
 - `supabase/functions/_shared/game.ts` — 純粋なゲームエンジン
 - `supabase/functions/game-api/index.ts` — 認証済みゲームコマンド
 - `supabase/migrations/` — テーブルとRLS
-- `src/App.tsx` — 全画面とプレビュー対戦
+- `src/App.tsx` — オンライン同期を含む全画面とプレビュー対戦
 - `src/lib/online.ts` — Supabaseクライアント
+- `scripts/smoke-online.mjs` — 2端末相当のオンライン結合確認
 - `src/game.test.ts` — ルールと非公開情報のテスト
 
 ## デザイン

@@ -32,11 +32,12 @@ Deno.serve(async (request) => {
     if (action === 'create_room') {
       const displayName = cleanName(body.name);
       const maxPlayers = Math.max(2, Math.min(5, Number(body.maxPlayers) || 5));
+      const counts = cleanCounts(body.counts);
       let room: { id: string; code: string } | null = null;
       for (let attempt = 0; attempt < 30 && !room; attempt += 1) {
         const code = String(crypto.getRandomValues(new Uint32Array(1))[0] % 10000).padStart(4, '0');
         const { data, error } = await service.from('rooms').insert({
-          code, host_user_id: userId, max_players: maxPlayers, card_counts: body.counts,
+          code, host_user_id: userId, max_players: maxPlayers, card_counts: counts,
         }).select('id,code').single();
         if (!error) room = data;
         else if (error.code !== '23505') throw error;
@@ -71,10 +72,25 @@ Deno.serve(async (request) => {
     if (action === 'snapshot') {
       const { data: stored } = await service.from('game_states').select('state').eq('room_id', room.id).maybeSingle();
       if (!stored) {
-        const { data: roster } = await service.from('room_players').select('player_id,display_name,seat,connected').eq('room_id', room.id).order('seat');
-        return reply({ lobby: { code, status: room.status, version: room.version, hostUserId: room.host_user_id, maxPlayers: room.max_players, counts: room.card_counts, players: roster } });
+        return reply({ lobby: await lobbyFor(service, room, userId) });
       }
       return reply({ view: projectForPlayer(stored.state as GameState, membership.player_id) });
+    }
+
+    if (action === 'configure_room') {
+      if (room.host_user_id !== userId) return reply({ error: 'ホストだけが構成を変更できます' }, 403);
+      if (room.status !== 'lobby') return reply({ error: '開始後は構成を変更できません' }, 409);
+      const { count } = await service.from('room_players').select('*', { count: 'exact', head: true }).eq('room_id', room.id);
+      const maxPlayers = Math.max(2, Math.min(5, Number(body.maxPlayers) || room.max_players));
+      if ((count ?? 0) > maxPlayers) return reply({ error: '現在の参加者より少ない人数にはできません' }, 409);
+      const counts = cleanCounts(body.counts);
+      const version = Number(room.version) + 1;
+      const { data: updated, error } = await service.from('rooms').update({
+        max_players: maxPlayers, card_counts: counts, version,
+      }).eq('id', room.id).select('*').single();
+      if (error || !updated) throw error ?? new Error('構成を更新できませんでした');
+      await broadcast(service, code, version);
+      return reply({ lobby: await lobbyFor(service, updated, userId) });
     }
 
     if (action === 'command') {
@@ -86,13 +102,19 @@ Deno.serve(async (request) => {
         return reply({ view: projectForPlayer(stored!.state as GameState, membership.player_id), replayed: true });
       }
 
-      if (body.command?.type === 'start') {
+      const command = body.command ?? {};
+      if (command.type === 'start') {
         if (room.host_user_id !== userId) return reply({ error: 'ホストだけが開始できます' }, 403);
         const { data: roster } = await service.from('room_players').select('display_name').eq('room_id', room.id).order('seat');
         if ((roster?.length ?? 0) < 2) return reply({ error: '2人以上必要です' }, 409);
-        const state = createGame(roster!.map((player) => player.display_name), room.card_counts);
+        const maxPlayers = Math.max(2, Math.min(5, Number(command.maxPlayers) || room.max_players));
+        if (roster!.length > maxPlayers) return reply({ error: '参加者数が上限を超えています' }, 409);
+        const counts = cleanCounts(command.counts ?? room.card_counts);
+        const state = createGame(roster!.map((player) => player.display_name), counts);
         await service.from('game_states').upsert({ room_id: room.id, state, version: state.version });
-        await service.from('rooms').update({ status: 'playing', version: state.version }).eq('id', room.id);
+        await service.from('rooms').update({
+          status: 'playing', version: state.version, max_players: maxPlayers, card_counts: counts,
+        }).eq('id', room.id);
         await service.from('command_receipts').insert({ room_id: room.id, command_id: commandId, user_id: userId, resulting_version: state.version });
         await broadcast(service, code, state.version);
         return reply({ view: projectForPlayer(state, membership.player_id) });
@@ -101,7 +123,6 @@ Deno.serve(async (request) => {
       const expectedVersion = Number(body.expectedVersion);
       const { data: stored } = await service.from('game_states').select('state,version').eq('room_id', room.id).single();
       if (!stored || stored.version !== expectedVersion) return reply({ error: '盤面が更新されました。再同期してください。', code: 'VERSION_CONFLICT' }, 409);
-      const command = body.command ?? {};
       let state = stored.state as GameState;
       if (command.type === 'draw') state = drawChoice(state, membership.player_id, command.choice);
       else if (command.type === 'scholar_select') state = selectScholarCard(state, membership.player_id, command.cardId);
@@ -126,6 +147,41 @@ function cleanName(value: unknown) {
   const name = String(value || '').trim().slice(0, 16);
   if (!name) throw new Error('呼び名を入力してください');
   return name;
+}
+
+function cleanCounts(value: unknown) {
+  const source = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const counts: Record<number, number> = {};
+  for (let rank = 1; rank <= 13; rank += 1) {
+    counts[rank] = Math.max(0, Math.min(20, Math.floor(Number(source[String(rank)]) || 0)));
+  }
+  return counts;
+}
+
+async function lobbyFor(
+  service: ReturnType<typeof createClient>,
+  room: Record<string, unknown>,
+  userId: string,
+) {
+  const { data: roster, error } = await service.from('room_players')
+    .select('player_id,display_name,seat,connected')
+    .eq('room_id', room.id)
+    .order('seat');
+  if (error) throw error;
+  return {
+    code: room.code,
+    status: room.status,
+    version: Number(room.version),
+    isHost: room.host_user_id === userId,
+    maxPlayers: Number(room.max_players),
+    counts: room.card_counts,
+    players: (roster ?? []).map((player) => ({
+      playerId: player.player_id,
+      displayName: player.display_name,
+      seat: player.seat,
+      connected: player.connected,
+    })),
+  };
 }
 
 async function broadcast(service: ReturnType<typeof createClient>, code: string, version: number) {

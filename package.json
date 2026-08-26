@@ -10,6 +10,7 @@
     "build": "tsc -b && vite build --configLoader runner",
     "preview": "vite preview",
     "test": "vitest run --config vitest.config.ts --configLoader runner",
+    "test:online": "node scripts/smoke-online.mjs",
     "test:watch": "vitest --config vitest.config.ts --configLoader runner",
     "lint": "eslint . --ignore-pattern dist",
     "check": "npm run lint && npm run test && npm run build"

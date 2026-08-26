@@ -2,6 +2,28 @@ import { createClient, type RealtimeChannel, type SupabaseClient } from '@supaba
 import type { CardCounts } from './presets';
 import type { PlayerView } from '../../supabase/functions/_shared/game';
 
+export interface LobbyPlayer {
+  playerId: string;
+  displayName: string;
+  seat: number;
+  connected: boolean;
+}
+
+export interface LobbySnapshot {
+  code: string;
+  status: 'lobby' | 'playing' | 'finished';
+  version: number;
+  isHost: boolean;
+  maxPlayers: number;
+  counts: CardCounts;
+  players: LobbyPlayer[];
+}
+
+export interface RoomSnapshot {
+  lobby?: LobbySnapshot;
+  view?: PlayerView;
+}
+
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const publishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
 const functionName = import.meta.env.VITE_GAME_FUNCTION_NAME || 'game-api';
@@ -24,7 +46,17 @@ async function sessionClient() {
 async function invoke<T>(body: Record<string, unknown>) {
   const client = await sessionClient();
   const { data, error } = await client.functions.invoke(functionName, { body });
-  if (error) throw error;
+  if (error) {
+    let message = error.message;
+    const response = (error as { context?: Response }).context;
+    if (response) {
+      try {
+        const payload = await response.json() as { error?: string };
+        if (payload.error) message = payload.error;
+      } catch { /* use the SDK error */ }
+    }
+    throw new Error(message);
+  }
   if (data?.error) throw new Error(data.error as string);
   return data as T;
 }
@@ -34,13 +66,20 @@ export const onlineApi = {
     invoke<{ code: string; playerId: string }>({ action: 'create_room', name, maxPlayers, counts }),
   joinRoom: (name: string, code: string) =>
     invoke<{ code: string; playerId: string }>({ action: 'join_room', name, code }),
-  snapshot: (code: string) => invoke<{ view: PlayerView }>({ action: 'snapshot', code }),
+  configureRoom: (code: string, maxPlayers: number, counts: CardCounts) =>
+    invoke<{ lobby: LobbySnapshot }>({ action: 'configure_room', code, maxPlayers, counts }),
+  snapshot: (code: string) => invoke<RoomSnapshot>({ action: 'snapshot', code }),
   command: (code: string, commandId: string, expectedVersion: number, command: Record<string, unknown>) =>
     invoke<{ view: PlayerView }>({ action: 'command', code, commandId, expectedVersion, command }),
-  subscribe(code: string, onChange: () => void): RealtimeChannel | null {
-    if (!supabase) return null;
-    const channel = supabase.channel(`room:${code}`, { config: { private: true } });
+  async subscribe(code: string, onChange: () => void): Promise<RealtimeChannel | null> {
+    const client = await sessionClient();
+    const { data } = await client.auth.getSession();
+    if (data.session) await client.realtime.setAuth(data.session.access_token);
+    const channel = client.channel(`room:${code}`, { config: { private: true } });
     channel.on('broadcast', { event: 'state_changed' }, onChange).subscribe();
     return channel;
+  },
+  async unsubscribe(channel: RealtimeChannel | null) {
+    if (supabase && channel) await supabase.removeChannel(channel);
   },
 };

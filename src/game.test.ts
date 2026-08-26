@@ -23,6 +23,30 @@ describe('game engine', () => {
     expect(JSON.stringify(view)).not.toContain('13-x');
   });
 
+  it('reveals effect choices only to the acting player', () => {
+    const game = base();
+    game.phase = 'resolve';
+    game.players[1].hand = [card(5, 'left'), card(13, 'right')];
+    game.pendingEffect = {
+      kind: 'public-execution', actorId: 'player-1', targetId: 'player-2', blockReincarnation: false,
+    };
+    const actor = projectForPlayer(game, 'player-1');
+    const bystander = projectForPlayer(game, 'player-3');
+    expect(actor.pendingTargetCards.map((item) => item.rank)).toEqual([5, 13]);
+    expect(actor.pendingTargetHandCount).toBe(2);
+    expect(bystander.pendingEffect).toBeNull();
+    expect(bystander.pendingTargetCards).toEqual([]);
+  });
+
+  it('reveals every final hand when the game ends', () => {
+    const game = base();
+    game.players[1].hand = [card(12, 'final')];
+    game.result = { winners: ['player-2'], reason: 'deck-exhausted', highRank: 12 };
+    game.phase = 'ended';
+    const view = projectForPlayer(game, 'player-1');
+    expect(view.players[1].ownHand?.[0].rank).toBe(12);
+  });
+
   it('shows both draw choices without revealing scholar eligibility in the projection', () => {
     const game = base();
     game.players[0].pendingScholar = true;

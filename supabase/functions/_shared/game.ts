@@ -82,6 +82,8 @@ export interface PlayerView {
   turnNumber: number;
   phase: Phase;
   pendingEffect: PendingEffect | null;
+  pendingTargetCards: Card[];
+  pendingTargetHandCount: number;
   scholarCandidates: Card[];
   events: GameEvent[];
   result: GameResult | null;
@@ -504,6 +506,10 @@ export function playCard(
 }
 
 export function projectForPlayer(state: GameState, viewerId: string): PlayerView {
+  const visiblePending = state.pendingEffect?.actorId === viewerId ? state.pendingEffect : null;
+  const pendingTarget = visiblePending
+    ? state.players.find((player) => player.id === visiblePending.targetId)
+    : undefined;
   return {
     id: state.id,
     version: state.version,
@@ -512,7 +518,7 @@ export function projectForPlayer(state: GameState, viewerId: string): PlayerView
       name: player.name,
       seat: player.seat,
       handCount: player.hand.length,
-      ownHand: player.id === viewerId ? copy(player.hand) : undefined,
+      ownHand: player.id === viewerId || state.result ? copy(player.hand) : undefined,
       eliminated: player.eliminated,
       connected: player.connected,
     })),
@@ -522,7 +528,11 @@ export function projectForPlayer(state: GameState, viewerId: string): PlayerView
     turnPlayerId: state.result ? null : activePlayer(state)?.id ?? null,
     turnNumber: state.turnNumber,
     phase: state.phase,
-    pendingEffect: state.pendingEffect && state.pendingEffect.actorId === viewerId ? copy(state.pendingEffect) : null,
+    pendingEffect: visiblePending ? copy(visiblePending) : null,
+    pendingTargetCards: visiblePending?.kind === 'public-execution' && pendingTarget
+      ? copy(pendingTarget.hand)
+      : [],
+    pendingTargetHandCount: pendingTarget?.hand.length ?? 0,
     scholarCandidates: activePlayer(state)?.id === viewerId ? copy(state.scholarCandidates) : [],
     events: state.events.filter((item) => !item.privateTo || item.privateTo === viewerId).map((item) => copy(item)),
     result: copy(state.result),
