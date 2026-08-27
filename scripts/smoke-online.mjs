@@ -69,8 +69,8 @@ const drawn = await invoke(host, {
 const playable = drawn.view.players.find((player) => player.id === created.playerId)?.ownHand?.find((card) => card.rank !== 13);
 if (!playable) throw new Error('No playable card after drawing');
 const targeted = [2, 3, 5, 6, 8, 9].includes(playable.rank);
-const secondRevolution = playable.rank === 1 && drawn.view.discard.filter((card) => card.rank === 1).length === 1;
-const choices = targeted || secondRevolution ? { targetId: 'player-2', guess: 13 } : undefined;
+const activeRevolution = playable.rank === 1 && drawn.view.rankOnePlayed >= 1;
+const choices = targeted || activeRevolution ? { targetId: 'player-2', guess: 13 } : undefined;
 const played = await invoke(host, {
   action: 'command', code: created.code, commandId: crypto.randomUUID(), expectedVersion: drawn.view.version,
   command: { type: 'play', cardId: playable.id, choices },
@@ -128,4 +128,54 @@ if (thirdSix.view.players.some((player) => player.eliminated) || !thirdSix.view.
   throw new Error('A rank 6 after the second did not resolve as a duel');
 }
 
-console.log(`Online smoke test passed (rooms ${created.code}/${duelRoom.code}, version ${played.view.version})`);
+const revolutionCounts = Object.fromEntries(Array.from({ length: 13 }, (_, index) => [index + 1, index === 0 ? 10 : 0]));
+const revolutionRoom = await invoke(host, { action: 'create_room', name: 'HOST', maxPlayers: 2, counts: revolutionCounts });
+const revolutionGuest = await invoke(guest, { action: 'join_room', name: 'GUEST', code: revolutionRoom.code });
+const revolutionLobby = await invoke(host, { action: 'snapshot', code: revolutionRoom.code });
+const revolutionStart = await invoke(host, {
+  action: 'command', code: revolutionRoom.code, commandId: crypto.randomUUID(), expectedVersion: revolutionLobby.lobby.version,
+  command: { type: 'start', counts: revolutionCounts, maxPlayers: 2 },
+});
+const revolutionHostDraw = await invoke(host, {
+  action: 'command', code: revolutionRoom.code, commandId: crypto.randomUUID(), expectedVersion: revolutionStart.view.version,
+  command: { type: 'draw', choice: 'one' },
+});
+const revolutionHostCard = revolutionHostDraw.view.players.find((player) => player.id === revolutionRoom.playerId)?.ownHand?.[0];
+const firstRevolution = await invoke(host, {
+  action: 'command', code: revolutionRoom.code, commandId: crypto.randomUUID(), expectedVersion: revolutionHostDraw.view.version,
+  command: { type: 'play', cardId: revolutionHostCard.id },
+});
+if (firstRevolution.view.rankOnePlayed !== 1 || firstRevolution.view.pendingEffect) {
+  throw new Error('The first rank 1 unexpectedly activated');
+}
+const revolutionGuestView = await invoke(guest, { action: 'snapshot', code: revolutionRoom.code });
+const revolutionGuestDraw = await invoke(guest, {
+  action: 'command', code: revolutionRoom.code, commandId: crypto.randomUUID(), expectedVersion: revolutionGuestView.view.version,
+  command: { type: 'draw', choice: 'one' },
+});
+const revolutionGuestCard = revolutionGuestDraw.view.players.find((player) => player.id === revolutionGuest.playerId)?.ownHand?.[0];
+const secondRevolution = await invoke(guest, {
+  action: 'command', code: revolutionRoom.code, commandId: crypto.randomUUID(), expectedVersion: revolutionGuestDraw.view.version,
+  command: { type: 'play', cardId: revolutionGuestCard.id, choices: { targetId: revolutionRoom.playerId } },
+});
+if (secondRevolution.view.rankOnePlayed !== 2 || secondRevolution.view.pendingEffect?.kind !== 'public-execution') {
+  throw new Error('The second rank 1 did not activate public execution');
+}
+const secondResolved = await invoke(guest, {
+  action: 'command', code: revolutionRoom.code, commandId: crypto.randomUUID(), expectedVersion: secondRevolution.view.version,
+  command: { type: 'resolve', discardIndex: 0 },
+});
+const thirdRevolutionDraw = await invoke(host, {
+  action: 'command', code: revolutionRoom.code, commandId: crypto.randomUUID(), expectedVersion: secondResolved.view.version,
+  command: { type: 'draw', choice: 'one' },
+});
+const thirdRevolutionCard = thirdRevolutionDraw.view.players.find((player) => player.id === revolutionRoom.playerId)?.ownHand?.[0];
+const thirdRevolution = await invoke(host, {
+  action: 'command', code: revolutionRoom.code, commandId: crypto.randomUUID(), expectedVersion: thirdRevolutionDraw.view.version,
+  command: { type: 'play', cardId: thirdRevolutionCard.id, choices: { targetId: revolutionGuest.playerId } },
+});
+if (thirdRevolution.view.rankOnePlayed !== 3 || thirdRevolution.view.pendingEffect?.kind !== 'public-execution') {
+  throw new Error('A rank 1 after the second did not activate public execution');
+}
+
+console.log(`Online smoke test passed (rooms ${created.code}/${duelRoom.code}/${revolutionRoom.code}, version ${played.view.version})`);

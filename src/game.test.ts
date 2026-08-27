@@ -96,6 +96,28 @@ describe('game engine', () => {
     expect(next.events.at(-1)?.text).not.toContain('守護');
   });
 
+  it('keeps the first rank 1 inactive', () => {
+    const game = base();
+    game.phase = 'action';
+    game.players[0].hand = [card(1), card(8, 'keep')];
+    const next = playCard(game, 'player-1', '1-x', {}, fixed);
+    expect(next.rankOnePlayed).toBe(1);
+    expect(next.pendingEffect).toBeNull();
+  });
+
+  it('activates every rank 1 after the first, even after the grave is recycled', () => {
+    const game = base();
+    game.phase = 'action';
+    game.rankOnePlayed = 2;
+    game.discard = [];
+    game.players[0].hand = [card(1), card(8, 'keep')];
+    game.players[1].hand = [card(4, 'target')];
+    const next = playCard(game, 'player-1', '1-x', { targetId: 'player-2' }, fixed);
+    expect(next.rankOnePlayed).toBe(3);
+    expect(next.pendingEffect?.kind).toBe('public-execution');
+    expect(projectForPlayer(next, 'player-1').rankOnePlayed).toBe(3);
+  });
+
   it('uses the first rank 6 for a private face-to-face reveal without elimination', () => {
     const game = base();
     game.phase = 'action';
@@ -112,6 +134,7 @@ describe('game engine', () => {
   it('uses the second rank 6 for a duel and eliminates the lower hand', () => {
     const game = base();
     game.phase = 'action';
+    game.rankSixPlayed = 1;
     game.discard = [card(6, 'first')];
     game.players[0].hand = [card(6), card(9, 'actor')];
     game.players[1].hand = [card(4, 'target')];
@@ -124,6 +147,7 @@ describe('game engine', () => {
   it('continues without elimination when a rank 6 duel is tied', () => {
     const game = base();
     game.phase = 'action';
+    game.rankSixPlayed = 1;
     game.discard = [card(6, 'first')];
     game.players[0].hand = [card(6), card(8, 'actor')];
     game.players[1].hand = [card(8, 'target')];
@@ -136,6 +160,7 @@ describe('game engine', () => {
   it('uses every rank 6 after the first for a duel', () => {
     const game = base();
     game.phase = 'action';
+    game.rankSixPlayed = 2;
     game.discard = [card(6, 'first'), card(6, 'second')];
     game.players[0].hand = [card(6), card(9, 'actor')];
     game.players[1].hand = [card(4, 'target')];

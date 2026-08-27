@@ -322,8 +322,8 @@ export default function App() {
   const chooseCard = (card: Card) => {
     if (!view || !isMyTurn || view.phase !== 'action' || busy) return;
     if (card.rank === 13) return flash('13は自分から場に出せません');
-    const secondOne = card.rank === 1 && view.discard.filter((item) => item.rank === 1).length === 1;
-    if ([2, 3, 5, 6, 8, 9].includes(card.rank) || secondOne) {
+    const activeOne = card.rank === 1 && view.rankOnePlayed >= 1;
+    if ([2, 3, 5, 6, 8, 9].includes(card.rank) || activeOne) {
       setTargeting(card); setSelectedTarget(''); return;
     }
     if (onlineConfigured) {

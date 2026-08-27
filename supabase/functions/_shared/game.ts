@@ -53,6 +53,7 @@ export interface GameState {
   scholarCandidates: Card[];
   skipNextId: string | null;
   endAfterResolution: boolean;
+  rankOnePlayed: number;
   rankSixPlayed: number;
   events: GameEvent[];
   result: GameResult | null;
@@ -79,6 +80,7 @@ export interface PlayerView {
   players: PublicPlayer[];
   deckCount: number;
   discard: Card[];
+  rankOnePlayed: number;
   reincarnationAvailable: boolean;
   turnPlayerId: string | null;
   turnNumber: number;
@@ -278,7 +280,7 @@ export function createGame(
   const state: GameState = {
     id: crypto.randomUUID(), version: 1, players, deck, discard: [], reincarnationCard,
     turnIndex: 0, turnNumber: 1, phase: 'draw', pendingEffect: null,
-    scholarCandidates: [], skipNextId: null, endAfterResolution: false, rankSixPlayed: 0, events: [], result: null,
+    scholarCandidates: [], skipNextId: null, endAfterResolution: false, rankOnePlayed: 0, rankSixPlayed: 0, events: [], result: null,
   };
   log(state, '夜会が始まった。最初の一枚を引いてください。', { kind: 'system' });
   return state;
@@ -404,7 +406,9 @@ export function playCard(
 
   switch (card.rank) {
     case 1: {
-      if (state.discard.filter((item) => item.rank === 1).length === 2) {
+      const previousOneCount = state.rankOnePlayed ?? Math.max(0, state.discard.filter((item) => item.rank === 1).length - 1);
+      state.rankOnePlayed = previousOneCount + 1;
+      if (state.rankOnePlayed >= 2) {
         const target = guardedTarget();
         if (target) prepareDiscardEffect(state, actor, target, 'public-execution', false, rng);
         else finishTurn(state);
@@ -441,7 +445,8 @@ export function playCard(
         const targetRank = target.hand[0]?.rank ?? 0;
         const ownHand = copy(actor.hand);
         const targetHand = copy(target.hand);
-        state.rankSixPlayed = Math.max((state.rankSixPlayed ?? 0) + 1, state.discard.filter((item) => item.rank === 6).length);
+        const previousSixCount = state.rankSixPlayed ?? Math.max(0, state.discard.filter((item) => item.rank === 6).length - 1);
+        state.rankSixPlayed = previousSixCount + 1;
         const isDuel = state.rankSixPlayed >= 2;
         if (isDuel) {
           if (ownRank < targetRank) eliminate(state, actor);
@@ -534,6 +539,7 @@ export function projectForPlayer(state: GameState, viewerId: string): PlayerView
     })),
     deckCount: state.deck.length,
     discard: copy(state.discard),
+    rankOnePlayed: state.rankOnePlayed ?? state.discard.filter((item) => item.rank === 1).length,
     reincarnationAvailable: Boolean(state.reincarnationCard),
     turnPlayerId: state.result ? null : activePlayer(state)?.id ?? null,
     turnNumber: state.turnNumber,
@@ -555,7 +561,7 @@ export const CARD_NAMES: Record<number, string> = {
 };
 
 export const CARD_DESCRIPTIONS: Record<number, string> = {
-  1: '二枚目だけが公開処刑へ変わる。',
+  1: '二枚目以降は公開処刑へ変わる。',
   2: '相手の階位を言い当てる。',
   3: 'ひとりの手札を自分だけが見る。',
   4: '次の実際の手番まで効果を受けない。',
