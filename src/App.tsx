@@ -74,6 +74,7 @@ function Brand({ onHome }: { onHome: () => void }) {
 export function TauntNotice({ event }: { event?: GameEvent }) {
   const [visible, setVisible] = useState(false);
   const lastEventId = useRef<string | null>(null);
+  const hideTimer = useRef<number | null>(null);
   const eventId = event?.id;
   const eventKind = event?.kind;
 
@@ -81,9 +82,16 @@ export function TauntNotice({ event }: { event?: GameEvent }) {
     if (eventKind !== 'taunt' || !eventId || eventId === lastEventId.current) return;
     lastEventId.current = eventId;
     setVisible(true);
-    const timer = window.setTimeout(() => setVisible(false), 900);
-    return () => window.clearTimeout(timer);
+    if (hideTimer.current !== null) window.clearTimeout(hideTimer.current);
+    hideTimer.current = window.setTimeout(() => {
+      setVisible(false);
+      hideTimer.current = null;
+    }, 900);
   }, [eventId, eventKind]);
+
+  useEffect(() => () => {
+    if (hideTimer.current !== null) window.clearTimeout(hideTimer.current);
+  }, []);
 
   return visible ? <div className="taunt-screen" role="status"><span>忘れてやーんの</span></div> : null;
 }

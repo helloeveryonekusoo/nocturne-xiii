@@ -54,7 +54,9 @@ describe('Nocturne XIII interface', () => {
 
     act(() => vi.advanceTimersByTime(400));
     rerender(<TauntNotice event={{ ...event }} />);
-    act(() => vi.advanceTimersByTime(500));
+    act(() => vi.advanceTimersByTime(200));
+    rerender(<TauntNotice />);
+    act(() => vi.advanceTimersByTime(300));
 
     expect(screen.queryByText('忘れてやーんの')).not.toBeInTheDocument();
   });
