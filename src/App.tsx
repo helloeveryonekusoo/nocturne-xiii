@@ -71,6 +71,23 @@ function Brand({ onHome }: { onHome: () => void }) {
   );
 }
 
+export function TauntNotice({ event }: { event?: GameEvent }) {
+  const [visible, setVisible] = useState(false);
+  const lastEventId = useRef<string | null>(null);
+  const eventId = event?.id;
+  const eventKind = event?.kind;
+
+  useEffect(() => {
+    if (eventKind !== 'taunt' || !eventId || eventId === lastEventId.current) return;
+    lastEventId.current = eventId;
+    setVisible(true);
+    const timer = window.setTimeout(() => setVisible(false), 900);
+    return () => window.clearTimeout(timer);
+  }, [eventId, eventKind]);
+
+  return visible ? <div className="taunt-screen" role="status"><span>忘れてやーんの</span></div> : null;
+}
+
 export default function App() {
   const [screen, setScreen] = useState<Screen>('home');
   const [name, setName] = useState(savedName);
@@ -91,12 +108,10 @@ export default function App() {
   const [selectedTarget, setSelectedTarget] = useState('');
   const [guess, setGuess] = useState(13);
   const [toast, setToast] = useState('');
-  const [taunt, setTaunt] = useState(false);
   const [busy, setBusy] = useState(false);
   const [graveOpen, setGraveOpen] = useState(false);
   const [graveSort, setGraveSort] = useState<'played' | 'rank-asc' | 'rank-desc'>('played');
   const [dismissedRevealId, setDismissedRevealId] = useState<string | null>(null);
-  const lastTaunt = useRef<string | null>(null);
   const editingCounts = useRef(false);
 
   const previewPlayers = useMemo(() => [name || '旅人', 'KIRI', 'AO'].slice(0, Math.min(maxPlayers, 3)), [name, maxPlayers]);
@@ -131,15 +146,6 @@ export default function App() {
       setScreen('game');
     }
   }, []);
-
-  useEffect(() => {
-    if (latestEvent?.kind === 'taunt' && latestEvent.id !== lastTaunt.current) {
-      lastTaunt.current = latestEvent.id;
-      setTaunt(true);
-      const timer = window.setTimeout(() => setTaunt(false), 900);
-      return () => window.clearTimeout(timer);
-    }
-  }, [latestEvent]);
 
   useEffect(() => {
     if (!onlineConfigured || !roomCode || screen === 'home') return;
@@ -478,7 +484,7 @@ export default function App() {
       {graveOpen && view && <div className="modal-backdrop grave-backdrop" role="dialog" aria-modal="true" aria-labelledby="grave-title"><div className="grave-modal"><div className="modal-heading"><div><small>GRAVE ARCHIVE</small><h3 id="grave-title">墓地のカード</h3></div><button type="button" onClick={() => setGraveOpen(false)} aria-label="墓地を閉じる">×</button></div><div className="grave-tools"><span>全{view.discard.length}枚</span><label>並び順<select aria-label="墓地の並び順" value={graveSort} onChange={(event) => setGraveSort(event.target.value as typeof graveSort)}><option value="played">捨てられた順</option><option value="rank-asc">数字の小さい順</option><option value="rank-desc">数字の大きい順</option></select></label></div><div className="grave-grid">{visibleDiscard.map((card, index) => <div className="grave-entry" key={`${card.id}-${index}`}><span className="grave-order">{graveSort === 'played' ? `${index + 1}枚目` : `階位 ${card.rank}`}</span><div className="card-face grave-card" role="img" aria-label={`${card.rank} ${CARD_NAMES[card.rank]}`}><CardArtwork card={card} /></div></div>)}</div><div className="grave-footer"><button className="primary-button" type="button" onClick={() => setGraveOpen(false)}>盤面に戻る</button></div></div></div>}
 
       {rulesOpen && <div className="rules-backdrop" onClick={() => setRulesOpen(false)}><aside className="rules-drawer" onClick={(event) => event.stopPropagation()}><div className="modal-heading"><div><small>RULE BOOK</small><h3>13階位の効果</h3></div><button onClick={() => setRulesOpen(false)}>×</button></div><p className="rules-intro">一枚引き、一枚を使う。山札が尽きれば、最後に持つ階位が最も高い者の勝利。</p><div className="rule-list">{Array.from({ length: 13 }, (_, index) => index + 1).map((rank) => <article key={rank}><span>{rank}</span><div><strong>{CARD_NAMES[rank]}</strong><p>{CARD_DESCRIPTIONS[rank]}</p></div><i>{SIGILS[rank]}</i></article>)}</div></aside></div>}
-      {taunt && <div className="taunt-screen" role="status"><span>忘れてやーんの</span></div>}
+      <TauntNotice event={latestEvent} />
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>
   );

@@ -1,8 +1,11 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import App, { CardRevealModal } from './App';
+import App, { CardRevealModal, TauntNotice } from './App';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 describe('Nocturne XIII interface', () => {
   it('renders the primary room actions and product identity', () => {
@@ -41,5 +44,18 @@ describe('Nocturne XIII interface', () => {
     expect(sort).toHaveTextContent('数字の大きい順');
     fireEvent.change(sort, { target: { value: 'rank-desc' } });
     expect(sort).toHaveValue('rank-desc');
+  });
+
+  it('dismisses the taunt even when the same event is resynchronized', () => {
+    vi.useFakeTimers();
+    const event = { id: 'taunt-1', text: '忘れてやーんの', kind: 'taunt' as const };
+    const { rerender } = render(<TauntNotice event={event} />);
+    expect(screen.getByText('忘れてやーんの')).toBeInTheDocument();
+
+    act(() => vi.advanceTimersByTime(400));
+    rerender(<TauntNotice event={{ ...event }} />);
+    act(() => vi.advanceTimersByTime(500));
+
+    expect(screen.queryByText('忘れてやーんの')).not.toBeInTheDocument();
   });
 });
