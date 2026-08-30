@@ -495,13 +495,13 @@ export function playCard(
     }
     case 6: {
       const target = guardedTarget();
+      const previousSixCount = state.rankSixPlayed ?? Math.max(0, state.discard.filter((item) => item.rank === 6).length - 1);
+      if (!isJoker) state.rankSixPlayed = previousSixCount + 1;
       if (target) {
         const ownRank = cardValue(actor.hand[0]);
         const targetRank = cardValue(target.hand[0]);
         const ownHand = copy(actor.hand);
         const targetHand = copy(target.hand);
-        const previousSixCount = state.rankSixPlayed ?? Math.max(0, state.discard.filter((item) => item.rank === 6).length - 1);
-        if (!isJoker) state.rankSixPlayed = previousSixCount + 1;
         const isDuel = previousSixCount >= 1;
         if (isDuel) {
           if (ownRank < targetRank) eliminate(state, actor);

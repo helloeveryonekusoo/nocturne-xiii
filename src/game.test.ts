@@ -157,6 +157,37 @@ describe('game engine', () => {
     expect(projectForPlayer(next, 'player-1').events.at(-1)?.text).toBe('対決：Bの手札は4。');
   });
 
+  it('eliminates the rank 6 user when their remaining hand is lower', () => {
+    const game = base();
+    game.phase = 'action';
+    game.rankSixPlayed = 1;
+    game.discard = [card(6, 'first')];
+    game.players[0].hand = [card(6), card(4, 'actor')];
+    game.players[1].hand = [card(9, 'target')];
+    const next = playCard(game, 'player-1', '6-x', { targetId: 'player-2' }, fixed);
+    expect(next.players[0].eliminated).toBe(true);
+    expect(next.players[0].hand).toHaveLength(0);
+    expect(next.players[1].eliminated).toBe(false);
+    expect(next.turnIndex).toBe(1);
+  });
+
+  it('counts a physical rank 6 even when its target is guarded', () => {
+    const game = base();
+    game.phase = 'action';
+    game.players[0].hand = [card(6), card(9, 'keep')];
+    game.players[1].hand = [card(4, 'guarded')];
+    game.players[1].guarded = true;
+    const afterBlockedSix = playCard(game, 'player-1', '6-x', { targetId: 'player-2' }, fixed);
+    expect(afterBlockedSix.rankSixPlayed).toBe(1);
+
+    afterBlockedSix.phase = 'action';
+    afterBlockedSix.turnIndex = 1;
+    afterBlockedSix.players[1].hand = [card(6, 'second'), card(4, 'actor')];
+    afterBlockedSix.players[2].hand = [card(9, 'target')];
+    const next = playCard(afterBlockedSix, 'player-2', '6-second', { targetId: 'player-3' }, fixed);
+    expect(next.players[1].eliminated).toBe(true);
+  });
+
   it('continues without elimination when a rank 6 duel is tied', () => {
     const game = base();
     game.phase = 'action';
