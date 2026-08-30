@@ -62,7 +62,7 @@ describe('Nocturne XIII interface', () => {
     expect(screen.queryByText('忘れてやーんの')).not.toBeInTheDocument();
   });
 
-  it('keeps a draw motion visible long enough to follow the card', () => {
+  it('keeps a normal draw motion visible long enough to follow without delaying play', () => {
     vi.useFakeTimers();
     const baseView: PlayerView = {
       id: 'game-1', version: 1,
@@ -81,9 +81,32 @@ describe('Nocturne XIII interface', () => {
     }} playerId="player-1" />);
 
     expect(screen.getByText('手札に加わった')).toBeInTheDocument();
-    act(() => vi.advanceTimersByTime(979));
+    act(() => vi.advanceTimersByTime(679));
     expect(screen.getByText('手札に加わった')).toBeInTheDocument();
     act(() => vi.advanceTimersByTime(1));
+    expect(screen.queryByText('手札に加わった')).not.toBeInTheDocument();
+  });
+
+  it('offers a reduced motion path for quick state feedback', () => {
+    vi.useFakeTimers();
+    const baseView: PlayerView = {
+      id: 'game-1', version: 1,
+      players: [{ id: 'player-1', name: '旅人', seat: 0, handCount: 1, ownHand: [{ id: 'old-card', rank: 4 }], eliminated: false, connected: true }],
+      deckCount: 10, discard: [], rankOnePlayed: 0, reincarnationAvailable: true,
+      turnPlayerId: 'player-1', turnNumber: 1, phase: 'draw', pendingEffect: null,
+      pendingTargetCards: [], pendingTargetHandCount: 0, scholarCandidates: [], events: [], result: null,
+    };
+    const { rerender } = render(<GameMotionLayer view={baseView} playerId="player-1" mode="reduced" />);
+    rerender(<GameMotionLayer view={{
+      ...baseView,
+      version: 2,
+      deckCount: 9,
+      phase: 'action',
+      players: [{ ...baseView.players[0], handCount: 2, ownHand: [...baseView.players[0].ownHand!, { id: 'drawn-card', rank: 7 }] }],
+    }} playerId="player-1" mode="reduced" />);
+
+    expect(screen.getByText('手札に加わった')).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(140));
     expect(screen.queryByText('手札に加わった')).not.toBeInTheDocument();
   });
 });

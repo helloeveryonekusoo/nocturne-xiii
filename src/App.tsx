@@ -10,6 +10,8 @@ import {
 import { onlineApi, onlineConfigured, type LobbySnapshot, type RoomSnapshot } from './lib/online';
 
 type Screen = 'home' | 'lobby' | 'game';
+type MotionMode = 'normal' | 'fast' | 'reduced';
+type SyncState = 'idle' | 'sending' | 'synced' | 'error';
 const PLAYER_ID = 'player-1';
 const SIGILS: Record<number, string> = {
   1: 'Ⅰ', 2: '⌖', 3: '◉', 4: '◇', 5: '✣', 6: '⚔', 7: '△',
@@ -20,6 +22,12 @@ const id = () => crypto.randomUUID();
 const savedName = () => {
   try { return globalThis.localStorage?.getItem('nocturne-name') || '旅人'; }
   catch { return '旅人'; }
+};
+const savedMotionMode = (): MotionMode => {
+  try {
+    const value = globalThis.localStorage?.getItem('nocturne-motion');
+    return value === 'fast' || value === 'reduced' ? value : 'normal';
+  } catch { return 'normal'; }
 };
 
 function CardArtwork({ card, compact = false }: { card: Card; compact?: boolean }) {
@@ -34,12 +42,12 @@ function CardArtwork({ card, compact = false }: { card: Card; compact?: boolean 
   );
 }
 
-function CardFace({ card, onClick, disabled, compact = false }: {
-  card: Card; onClick?: () => void; disabled?: boolean; compact?: boolean;
+function CardFace({ card, onClick, disabled, compact = false, disabledReason }: {
+  card: Card; onClick?: () => void; disabled?: boolean; compact?: boolean; disabledReason?: string;
 }) {
   return (
     <button
-      className={`card-face rank-${card.rank} ${compact ? 'compact-card' : ''}`}
+      className={`card-face rank-${card.rank} ${compact ? 'compact-card' : ''} ${onClick && !disabled ? 'is-playable' : ''} ${disabledReason ? 'is-locked' : ''}`}
       type="button"
       onClick={onClick}
       disabled={disabled}
@@ -47,6 +55,7 @@ function CardFace({ card, onClick, disabled, compact = false }: {
     >
       <CardArtwork card={card} compact={compact} />
       {onClick && !disabled && !compact && <span className="card-action-hint">選んで使う</span>}
+      {disabledReason && !compact && <span className="card-disabled-reason">{disabledReason}</span>}
     </button>
   );
 }
@@ -114,7 +123,7 @@ type MotionSnapshot = {
   turnPlayerId: string | null;
 };
 
-export function GameMotionLayer({ view, playerId }: { view: PlayerView; playerId: string }) {
+export function GameMotionLayer({ view, playerId, mode = 'normal' }: { view: PlayerView; playerId: string; mode?: MotionMode }) {
   const [cue, setCue] = useState<MotionCue | null>(null);
   const previous = useRef<MotionSnapshot | null>(null);
   const hideTimer = useRef<number | null>(null);
@@ -158,11 +167,16 @@ export function GameMotionLayer({ view, playerId }: { view: PlayerView; playerId
     if (!nextCue) return;
     if (hideTimer.current !== null) window.clearTimeout(hideTimer.current);
     setCue(nextCue);
+    const duration = mode === 'reduced'
+      ? 140
+      : mode === 'fast'
+        ? (nextCue.kind === 'turn' ? 320 : 420)
+        : (nextCue.kind === 'turn' ? 560 : 680);
     hideTimer.current = window.setTimeout(() => {
       setCue(null);
       hideTimer.current = null;
-    }, nextCue.kind === 'turn' ? 820 : 980);
-  }, [playerId, view]);
+    }, duration);
+  }, [mode, playerId, view]);
 
   useEffect(() => () => {
     if (hideTimer.current !== null) window.clearTimeout(hideTimer.current);
@@ -170,15 +184,34 @@ export function GameMotionLayer({ view, playerId }: { view: PlayerView; playerId
 
   if (!cue) return null;
   if (cue.kind === 'turn') {
-    return <div className="turn-transition" role="status"><small>TURN {view.turnNumber}</small><strong>{cue.label}</strong></div>;
+    return <div className={`turn-transition motion-${mode}`} role="status"><small>TURN {view.turnNumber}</small><strong>{cue.label}</strong></div>;
   }
   return (
-    <div className={`motion-layer motion-${cue.kind}`} aria-hidden="true">
+    <div className={`motion-layer motion-${cue.kind} motion-${mode}`} aria-hidden="true">
       <div className="motion-card" key={cue.id}>
         {cue.card
           ? <div className={`card-face motion-card-face rank-${cue.card.rank}`}><CardArtwork card={cue.card} compact /></div>
           : <div className="motion-card-back"><span>XIII</span></div>}
         <span className="motion-label">{cue.label}</span>
+      </div>
+    </div>
+  );
+}
+
+function GameLogModal({ events, onClose }: { events: GameEvent[]; onClose: () => void }) {
+  return (
+    <div className="modal-backdrop log-backdrop" role="dialog" aria-modal="true" aria-labelledby="log-title">
+      <div className="log-modal">
+        <div className="modal-heading">
+          <div><small>TABLE HISTORY</small><h3 id="log-title">対戦履歴</h3></div>
+          <button type="button" onClick={onClose} aria-label="対戦履歴を閉じる">×</button>
+        </div>
+        <ol className="log-list">
+          {events.length
+            ? events.map((event, index) => <li key={event.id}><span>{String(index + 1).padStart(2, '0')}</span><p>{event.text}</p></li>)
+            : <li className="log-empty"><p>まだ行動はありません。</p></li>}
+        </ol>
+        <div className="grave-footer"><button className="primary-button" type="button" onClick={onClose}>盤面に戻る</button></div>
       </div>
     </div>
   );
@@ -220,9 +253,13 @@ export default function App() {
   const [toast, setToast] = useState('');
   const [busy, setBusy] = useState(false);
   const [graveOpen, setGraveOpen] = useState(false);
+  const [logOpen, setLogOpen] = useState(false);
   const [graveSort, setGraveSort] = useState<'played' | 'rank-asc' | 'rank-desc'>('played');
   const [dismissedRevealId, setDismissedRevealId] = useState<string | null>(null);
+  const [motionMode, setMotionMode] = useState<MotionMode>(savedMotionMode);
+  const [syncState, setSyncState] = useState<SyncState>('idle');
   const editingCounts = useRef(false);
+  const syncTimer = useRef<number | null>(null);
 
   const previewPlayers = useMemo(() => [name || '旅人', 'KIRI', 'AO'].slice(0, Math.min(maxPlayers, 3)), [name, maxPlayers]);
   const players = onlineConfigured && lobby
@@ -248,6 +285,26 @@ export default function App() {
     document.documentElement.scrollTop = 0;
     document.body.scrollTop = 0;
   }, [screen]);
+
+  useEffect(() => () => {
+    if (syncTimer.current !== null) window.clearTimeout(syncTimer.current);
+  }, []);
+
+  const changeMotionMode = (nextMode: MotionMode) => {
+    setMotionMode(nextMode);
+    try { globalThis.localStorage?.setItem('nocturne-motion', nextMode); } catch { /* private browsing */ }
+  };
+
+  const showSyncState = (nextState: SyncState) => {
+    if (syncTimer.current !== null) window.clearTimeout(syncTimer.current);
+    setSyncState(nextState);
+    if (nextState === 'synced') {
+      syncTimer.current = window.setTimeout(() => {
+        setSyncState('idle');
+        syncTimer.current = null;
+      }, 1400);
+    }
+  };
 
   const acceptSnapshot = useCallback((snapshot: RoomSnapshot) => {
     if (snapshot.lobby) {
@@ -325,11 +382,14 @@ export default function App() {
   const sendOnlineCommand = async (command: Record<string, unknown>) => {
     if (!onlineView || !roomCode) throw new Error('盤面を同期できていません');
     setBusy(true);
+    showSyncState('sending');
     try {
       const result = await onlineApi.command(roomCode, id(), onlineView.version, command);
       setOnlineView(result.view);
       setScreen('game');
+      showSyncState('synced');
     } catch (error) {
+      showSyncState('error');
       try { acceptSnapshot(await onlineApi.snapshot(roomCode)); } catch { /* keep the actionable error */ }
       flash(error instanceof Error ? error.message : '操作を反映できませんでした');
     } finally {
@@ -498,11 +558,11 @@ export default function App() {
 
   const goHome = () => {
     if (screen === 'game' && view && !view.result && !window.confirm('進行中の夜会から退出しますか？')) return;
-    setScreen('home'); setGame(null); setOnlineView(null); setLobby(null); setRoomCode(''); setTargeting(null); setGraveOpen(false); setDismissedRevealId(null);
+    setScreen('home'); setGame(null); setOnlineView(null); setLobby(null); setRoomCode(''); setTargeting(null); setGraveOpen(false); setLogOpen(false); setDismissedRevealId(null); setSyncState('idle');
   };
 
   return (
-    <div className={`app-shell screen-${screen}`}>
+    <div className={`app-shell screen-${screen}`} data-motion={motionMode} aria-busy={busy}>
       {screen === 'home' && (
         <main className="landing-shell">
           <header className="topbar"><Brand onHome={goHome} /><button className="text-button" onClick={() => setRulesOpen(true)}>遊び方</button></header>
@@ -561,7 +621,7 @@ export default function App() {
 
       {screen === 'game' && view && (
         <main className="game-shell">
-          <header className="game-header"><Brand onHome={goHome} /><div className="game-status"><span>ROOM {roomCode}</span><span>TURN {view.turnNumber}</span><button onClick={() => setRulesOpen(true)}>?</button></div></header>
+          <header className="game-header"><Brand onHome={goHome} /><div className="game-status"><span className="room-status">ROOM {roomCode}</span><span>TURN {view.turnNumber}</span>{onlineConfigured && <span className={`sync-status sync-${syncState}`} role="status"><i />{syncState === 'sending' ? '送信中' : syncState === 'synced' ? '反映済み' : syncState === 'error' ? '再同期' : '接続中'}</span>}<label className="motion-setting"><span>演出</span><select aria-label="演出速度" value={motionMode} onChange={(event) => changeMotionMode(event.target.value as MotionMode)}><option value="normal">標準</option><option value="fast">高速</option><option value="reduced">軽減</option></select></label><button className="history-button" onClick={() => setLogOpen(true)} aria-label="対戦履歴を見る">履歴</button><button onClick={() => setRulesOpen(true)} aria-label="ルールを見る">?</button></div></header>
           <section className="game-board">
             <PhaseTrack phase={view.phase} isMyTurn={isMyTurn} />
             <div className="opponents">
@@ -573,17 +633,17 @@ export default function App() {
             </div>
             <div className="board-center">
               <div className="pile-zone deck-zone"><small>DRAW PILE</small><div className="pile deck-pile"><i /><i /><span>山札</span><strong>{view.deckCount}</strong></div><p>残り {view.deckCount} 枚</p></div>
-              <div className="center-message"><small>{isMyTurn ? 'YOUR TURN' : 'TABLE STATUS'}</small><strong>{isMyTurn ? phaseLabel(view.phase) : `${view.players.find((player) => player.id === view.turnPlayerId)?.name ?? ''}の手番`}</strong><p className="latest-event">{latestEvent?.text ?? '夜会は静かに進んでいる。'}</p>{isMyTurn && <span className="action-beacon">次にできる操作を下に表示中</span>}</div>
+              <div className={`center-message ${isMyTurn ? 'awaiting-input' : ''}`}><span className="turn-owner"><i />{isMyTurn ? 'あなたの手番' : '対戦進行中'}</span><strong>{isMyTurn ? phaseLabel(view.phase) : `${view.players.find((player) => player.id === view.turnPlayerId)?.name ?? ''}の手番`}</strong><p className="latest-event"><span>直前の出来事</span>{latestEvent?.text ?? '夜会は静かに進んでいる。'}</p>{isMyTurn && <span className="action-beacon">操作は手札の横に表示されています</span>}</div>
               <div className="pile-zone discard-zone"><small>GRAVEYARD</small><button className="pile discard-pile" type="button" onClick={() => setGraveOpen(true)} disabled={!view.discard.length} aria-label={`墓地のカード${view.discard.length}枚をすべて見る`}>{view.discard.at(-1) ? <span className="card-face compact-card pile-card" aria-hidden="true"><CardArtwork card={view.discard.at(-1)!} compact /></span> : <strong>0</strong>}<span>墓地を見る</span></button><p>{view.discard.length} 枚を公開</p></div>
             </div>
-            <div className="event-strip" aria-live="polite"><small>ACTION LOG</small>{view.events.slice(-3).map((event) => <span key={event.id}>{event.text}</span>)}</div>
-            <GameMotionLayer view={view} playerId={playerId} />
+            <button className="event-strip" type="button" onClick={() => setLogOpen(true)} aria-label="対戦履歴を開く"><small>ACTION LOG</small>{view.events.slice(-3).map((event) => <span key={event.id}>{event.text}</span>)}<b>すべて見る</b></button>
+            <GameMotionLayer view={view} playerId={playerId} mode={motionMode} />
           </section>
           <section className="hand-dock">
             <div className="self-label"><span className="avatar">{(me?.name ?? name).slice(0, 1)}</span><div><strong>{me?.name ?? name}</strong><small>{me?.eliminated ? '脱落' : isMyTurn ? 'あなたの手番' : '待機中'}</small></div></div>
-            <div className="hand-zone"><div className="hand-heading"><small>YOUR HAND</small><span>{view.phase === 'action' && isMyTurn ? '使うカードを選択' : `${me?.ownHand?.length ?? 0}枚の手札`}</span></div><div className="hand-cards">{(me?.ownHand ?? []).map((card) => <CardFace card={card} key={card.id} onClick={() => chooseCard(card)} disabled={busy || !isMyTurn || view.phase !== 'action' || me?.eliminated} />)}</div></div>
+            <div className="hand-zone"><div className="hand-heading"><small>YOUR HAND</small><span>{view.phase === 'action' && isMyTurn ? '使用するカードを選択' : `${me?.ownHand?.length ?? 0}枚の手札`}</span></div><div className="hand-cards">{(me?.ownHand ?? []).map((card) => { const disabledReason = me?.eliminated ? '脱落しています' : !isMyTurn ? '手番を待っています' : view.phase !== 'action' ? 'ドロー後に使用' : card.rank === 13 ? '自分からは使えません' : undefined; return <CardFace card={card} key={card.id} onClick={() => chooseCard(card)} disabled={busy || Boolean(disabledReason)} disabledReason={busy ? '処理中…' : disabledReason} />; })}</div></div>
             <div className="draw-actions">
-              {isMyTurn && view.phase === 'draw' ? <><small className="action-caption">DRAW PHASE · どちらかを選択</small><button className="draw-one" onClick={() => draw('one')}><span><i>通常</i>山札から</span><strong>1枚引く <b>→</b></strong></button><button className="draw-three" onClick={() => draw('three')}><span><i>7の記憶</i>覚えているなら</span><strong>3枚見る <b>→</b></strong></button></> : <div className={`waiting-action ${isMyTurn ? 'is-mine' : ''}`}><span className="pulse" /><div><strong>{view.phase === 'action' && isMyTurn ? 'カードを選んでください' : '夜会の進行を待っています'}</strong><small>{view.phase === 'action' && isMyTurn ? '手札をタップすると効果を使えます' : '手番になると操作がここに表示されます'}</small></div></div>}
+              {isMyTurn && view.phase === 'draw' ? <><small className="action-caption">STEP 1 · ドロー方法を選ぶ</small><button className="draw-one" onClick={() => draw('one')} disabled={busy}><span><i>通常のドロー</i>山札からそのまま</span><strong>{busy ? '処理中…' : '1枚引く'} <b>→</b></strong></button><button className="draw-three" onClick={() => draw('three')} disabled={busy}><span><i>前の自分の番に7を使用</i>3枚から1枚を選ぶ</span><strong>{busy ? '処理中…' : '3枚見る'} <b>→</b></strong></button></> : <div className={`waiting-action ${isMyTurn ? 'is-mine' : ''}`}><span className="pulse" /><div><strong>{busy ? '操作を反映しています' : view.phase === 'action' && isMyTurn ? '使うカードを選んでください' : 'ほかのプレイヤーを待っています'}</strong><small>{busy ? '完了すると自動で盤面が更新されます' : view.phase === 'action' && isMyTurn ? '使用できるカードが明るく表示されます' : '手番になるとここに操作が表示されます'}</small></div></div>}
             </div>
           </section>
 
@@ -592,6 +652,7 @@ export default function App() {
             ? view.pendingTargetCards.map((card, index) => <CardFace card={card} key={card.id} onClick={() => resolveEffect(index)} disabled={busy} />)
             : Array.from({ length: view.pendingTargetHandCount }, (_, index) => <button className="mystery-card" key={index} onClick={() => resolveEffect(index)} disabled={busy}><span>XIII</span><strong>{index === 0 ? '左' : '右'}を選ぶ</strong></button>)}</div></div></div>}
           {visibleRevealEvent && <CardRevealModal event={visibleRevealEvent} onNext={() => setDismissedRevealId(visibleRevealEvent.id)} />}
+          {logOpen && <GameLogModal events={view.events} onClose={() => setLogOpen(false)} />}
           {view.result && <div className="modal-backdrop result-backdrop"><div className="result-modal"><small>THE NIGHT IS OVER</small><h2>{view.result.winners.includes(playerId) ? 'あなたの勝利' : view.result.winners.length ? `${view.players.find((player) => player.id === view.result?.winners[0])?.name}の勝利` : '引き分け'}</h2><p>{view.result.reason === 'deck-exhausted' ? '最後に残った階位が夜会の行方を決めました。' : '最後まで卓に残った者が運命を掴みました。'}</p><div className="final-hands">{view.players.map((player) => <div key={player.id}><span>{player.name}</span><strong>{player.ownHand?.[0]?.rank ?? '—'}</strong></div>)}</div>{(!onlineConfigured || lobby?.isHost) ? <button className="primary-button" onClick={startGame} disabled={busy}>同じ構成でもう一度 <span>↻</span></button> : <p>ホストの再開を待っています</p>}<button className="ghost-button" onClick={goHome}>タイトルへ戻る</button></div></div>}
         </main>
       )}
