@@ -33,6 +33,8 @@ Deno.serve(async (request) => {
       const displayName = cleanName(body.name);
       const maxPlayers = Math.max(2, Math.min(5, Number(body.maxPlayers) || 5));
       const counts = cleanCounts(body.counts);
+      const now = new Date().toISOString();
+      await service.from('rooms').delete().lt('expires_at', now);
       let room: { id: string; code: string } | null = null;
       for (let attempt = 0; attempt < 30 && !room; attempt += 1) {
         const code = String(crypto.getRandomValues(new Uint32Array(1))[0] % 10000).padStart(4, '0');
@@ -43,27 +45,48 @@ Deno.serve(async (request) => {
         else if (error.code !== '23505') throw error;
       }
       if (!room) throw new Error('空いている合言葉を発行できませんでした');
-      await service.from('room_players').insert({ room_id: room.id, user_id: userId, player_id: 'player-1', display_name: displayName, seat: 0 });
+      const { error: hostError } = await service.from('room_players').insert({ room_id: room.id, user_id: userId, player_id: 'player-1', display_name: displayName, seat: 0 });
+      if (hostError) throw hostError;
       return reply({ code: room.code, playerId: 'player-1' });
     }
 
-    const code = String(body.code || '').padStart(4, '0');
+    const code = String(body.code || '').trim();
+    if (!/^\d{4}$/.test(code)) return reply({ error: '4桁の合言葉を入力してください' }, 400);
     const { data: room, error: roomError } = await service.from('rooms').select('*').eq('code', code).gt('expires_at', new Date().toISOString()).single();
     if (roomError || !room) return reply({ error: 'その部屋は見つかりません' }, 404);
 
     if (action === 'join_room') {
       if (room.status !== 'lobby') return reply({ error: 'すでに夜会が始まっています' }, 409);
-      const { data: roster } = await service.from('room_players').select('seat,user_id,player_id').eq('room_id', room.id).order('seat');
-      const existing = roster?.find((player) => player.user_id === userId);
-      if (existing) return reply({ code, playerId: existing.player_id });
-      if ((roster?.length ?? 0) >= room.max_players) return reply({ error: 'この部屋は満員です' }, 409);
-      const used = new Set((roster ?? []).map((player) => player.seat));
-      const seat = [0, 1, 2, 3, 4].find((candidate) => !used.has(candidate))!;
-      const playerId = `player-${seat + 1}`;
-      const { error } = await service.from('room_players').insert({ room_id: room.id, user_id: userId, player_id: playerId, display_name: cleanName(body.name), seat });
-      if (error) throw error;
-      await broadcast(service, code, room.version);
-      return reply({ code, playerId });
+      const displayName = cleanName(body.name);
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        const { data: roster, error: rosterError } = await service.from('room_players')
+          .select('seat,user_id,player_id').eq('room_id', room.id).order('seat');
+        if (rosterError) throw rosterError;
+        const existing = roster?.find((player) => player.user_id === userId);
+        if (existing) {
+          await service.from('room_players').update({
+            display_name: displayName, connected: true, last_seen_at: new Date().toISOString(),
+          }).eq('room_id', room.id).eq('user_id', userId);
+          await service.from('rooms').update({ expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() }).eq('id', room.id);
+          await broadcast(service, code, room.version);
+          return reply({ code, playerId: existing.player_id });
+        }
+        if ((roster?.length ?? 0) >= room.max_players) return reply({ error: 'この部屋は満員です' }, 409);
+        const used = new Set((roster ?? []).map((player) => player.seat));
+        const seat = [0, 1, 2, 3, 4].find((candidate) => !used.has(candidate));
+        if (seat === undefined) return reply({ error: 'この部屋は満員です' }, 409);
+        const playerId = `player-${seat + 1}`;
+        const { error } = await service.from('room_players').insert({
+          room_id: room.id, user_id: userId, player_id: playerId, display_name: displayName, seat,
+        });
+        if (!error) {
+          await service.from('rooms').update({ expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() }).eq('id', room.id);
+          await broadcast(service, code, room.version);
+          return reply({ code, playerId });
+        }
+        if (error.code !== '23505') throw error;
+      }
+      return reply({ error: '参加が集中しています。もう一度「部屋に入る」を押してください' }, 409);
     }
 
     const { data: membership } = await service.from('room_players').select('player_id').eq('room_id', room.id).eq('user_id', userId).single();
@@ -110,7 +133,8 @@ Deno.serve(async (request) => {
         const maxPlayers = Math.max(2, Math.min(5, Number(command.maxPlayers) || room.max_players));
         if (roster!.length > maxPlayers) return reply({ error: '参加者数が上限を超えています' }, 409);
         const counts = cleanCounts(command.counts ?? room.card_counts);
-        const state = createGame(roster!.map((player) => player.display_name), counts);
+        const startingPlayerIndex = crypto.getRandomValues(new Uint32Array(1))[0] % roster!.length;
+        const state = createGame(roster!.map((player) => player.display_name), counts, Math.random, startingPlayerIndex);
         await service.from('game_states').upsert({ room_id: room.id, state, version: state.version });
         await service.from('rooms').update({
           status: 'playing', version: state.version, max_players: maxPlayers, card_counts: counts,

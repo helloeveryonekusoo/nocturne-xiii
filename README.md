@@ -58,7 +58,7 @@ npm test
 npm run build
 ```
 
-公開済みのSupabaseに対して、匿名ログイン、2人入室、ロビー構成同期、開始、ドロー、カード使用、非公開情報の保護をまとめて確認できます。
+公開済みのSupabaseに対して、匿名ログイン、ロビー構成同期、ランダム先行、ドロー、カード使用、非公開情報の保護に加え、5人の同時入室を複数回まとめて確認できます。
 
 ```bash
 SUPABASE_URL=... SUPABASE_PUBLISHABLE_KEY=... npm run test:online

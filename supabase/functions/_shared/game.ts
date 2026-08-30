@@ -282,6 +282,7 @@ export function createGame(
   playerNames: string[],
   cardCounts: Record<number, number>,
   rng: Rng = Math.random,
+  startingPlayerIndex?: number,
 ): GameState {
   if (playerNames.length < 2 || playerNames.length > 5) throw new Error('プレイヤーは2〜5人です');
   const cards: Card[] = [];
@@ -306,12 +307,14 @@ export function createGame(
     pendingScholar: false,
   }));
   const reincarnationCard = deck.pop()!;
+  const randomStart = startingPlayerIndex ?? Math.floor(rng() * players.length);
+  const turnIndex = ((Math.trunc(randomStart) % players.length) + players.length) % players.length;
   const state: GameState = {
     id: crypto.randomUUID(), version: 1, players, deck, discard: [], reincarnationCard,
-    turnIndex: 0, turnNumber: 1, phase: 'draw', pendingEffect: null,
+    turnIndex, turnNumber: 1, phase: 'draw', pendingEffect: null,
     scholarCandidates: [], skipNextId: null, endAfterResolution: false, rankOnePlayed: 0, rankSixPlayed: 0, events: [], result: null,
   };
-  log(state, '夜会が始まった。最初の一枚を引いてください。', { kind: 'system' });
+  log(state, `先行は${players[turnIndex].name}に決まった。最初の一枚を引いてください。`, { kind: 'system' });
   return state;
 }
 

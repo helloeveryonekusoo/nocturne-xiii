@@ -13,6 +13,13 @@ function base(): GameState {
 }
 
 describe('game engine', () => {
+  it('chooses the starting player from the supplied random value', () => {
+    const game = createGame(['A', 'B', 'C'], { ...STARTER_COUNTS, 13: 2 }, () => 0.99);
+    expect(game.turnIndex).toBe(2);
+    expect(game.events.at(-1)?.text).toContain('先行はC');
+    expect(projectForPlayer(game, 'player-1').turnPlayerId).toBe('player-3');
+  });
+
   it('adds configurable joker cards to the deck', () => {
     const game = createGame(['A', 'B'], { 0: 1, 1: 3 }, fixed);
     const allCards = [game.reincarnationCard, ...game.deck, ...game.players.flatMap((player) => player.hand)].filter(Boolean) as Card[];

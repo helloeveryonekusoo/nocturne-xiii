@@ -5,6 +5,7 @@ import App, { CardRevealModal, GameMotionLayer, TauntNotice } from './App';
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -35,6 +36,7 @@ describe('Nocturne XIII interface', () => {
   });
 
   it('opens every discarded card and provides numeric sort orders', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: /新しい部屋をつくる/ }));
     fireEvent.click(screen.getByRole('button', { name: /夜会を始める/ }));

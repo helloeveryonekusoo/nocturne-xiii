@@ -33,20 +33,37 @@ export const supabase: SupabaseClient | null = onlineConfigured ? createClient(u
   auth: { persistSession: true, autoRefreshToken: true },
 }) : null;
 
+let sessionRequest: Promise<SupabaseClient> | null = null;
+
 async function sessionClient() {
   if (!supabase) throw new Error('オンライン対戦の設定がまだ完了していません');
-  const { data } = await supabase.auth.getSession();
-  if (!data.session) {
-    const { error } = await supabase.auth.signInAnonymously();
-    if (error) throw error;
+  if (sessionRequest) return sessionRequest;
+  sessionRequest = (async () => {
+    const { data, error: sessionError } = await supabase.auth.getSession();
+    if (sessionError) throw sessionError;
+    if (!data.session) {
+      const { error } = await supabase.auth.signInAnonymously();
+      if (error) throw error;
+    }
+    return supabase;
+  })();
+  try {
+    return await sessionRequest;
+  } finally {
+    sessionRequest = null;
   }
-  return supabase;
 }
 
-async function invoke<T>(body: Record<string, unknown>) {
+const retryDelay = (attempt: number) => new Promise((resolve) => window.setTimeout(resolve, 250 * (attempt + 1)));
+
+async function invoke<T>(body: Record<string, unknown>, retries = 0) {
   const client = await sessionClient();
-  const { data, error } = await client.functions.invoke(functionName, { body });
-  if (error) {
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    const { data, error } = await client.functions.invoke(functionName, { body });
+    if (!error) {
+      if (data?.error) throw new Error(data.error as string);
+      return data as T;
+    }
     let message = error.message;
     const response = (error as { context?: Response }).context;
     if (response) {
@@ -55,22 +72,23 @@ async function invoke<T>(body: Record<string, unknown>) {
         if (payload.error) message = payload.error;
       } catch { /* use the SDK error */ }
     }
-    throw new Error(message);
+    const retryable = !response || response.status === 429 || response.status >= 500;
+    if (!retryable || attempt === retries) throw new Error(message);
+    await retryDelay(attempt);
   }
-  if (data?.error) throw new Error(data.error as string);
-  return data as T;
+  throw new Error('オンライン対戦に接続できませんでした');
 }
 
 export const onlineApi = {
   createRoom: (name: string, maxPlayers: number, counts: CardCounts) =>
     invoke<{ code: string; playerId: string }>({ action: 'create_room', name, maxPlayers, counts }),
   joinRoom: (name: string, code: string) =>
-    invoke<{ code: string; playerId: string }>({ action: 'join_room', name, code }),
+    invoke<{ code: string; playerId: string }>({ action: 'join_room', name, code }, 2),
   configureRoom: (code: string, maxPlayers: number, counts: CardCounts) =>
     invoke<{ lobby: LobbySnapshot }>({ action: 'configure_room', code, maxPlayers, counts }),
-  snapshot: (code: string) => invoke<RoomSnapshot>({ action: 'snapshot', code }),
+  snapshot: (code: string) => invoke<RoomSnapshot>({ action: 'snapshot', code }, 2),
   command: (code: string, commandId: string, expectedVersion: number, command: Record<string, unknown>) =>
-    invoke<{ view: PlayerView }>({ action: 'command', code, commandId, expectedVersion, command }),
+    invoke<{ view: PlayerView }>({ action: 'command', code, commandId, expectedVersion, command }, 1),
   async subscribe(code: string, onChange: () => void): Promise<RealtimeChannel | null> {
     const client = await sessionClient();
     const { data } = await client.auth.getSession();
