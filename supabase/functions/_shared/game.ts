@@ -495,7 +495,8 @@ export function playCard(
     }
     case 6: {
       const target = guardedTarget();
-      const previousSixCount = state.rankSixPlayed ?? Math.max(0, state.discard.filter((item) => item.rank === 6).length - 1);
+      const visiblePreviousSixCount = Math.max(0, state.discard.filter((item) => item.rank === 6).length - (isJoker ? 0 : 1));
+      const previousSixCount = Math.max(state.rankSixPlayed ?? 0, visiblePreviousSixCount);
       if (!isJoker) state.rankSixPlayed = previousSixCount + 1;
       if (target) {
         const ownRank = cardValue(actor.hand[0]);

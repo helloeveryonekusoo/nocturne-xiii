@@ -188,6 +188,18 @@ describe('game engine', () => {
     expect(next.players[1].eliminated).toBe(true);
   });
 
+  it('repairs an uncounted guarded rank 6 from an already-running game', () => {
+    const game = base();
+    game.phase = 'action';
+    game.rankSixPlayed = 0;
+    game.discard = [card(6, 'previously-blocked')];
+    game.players[0].hand = [card(6), card(4, 'actor')];
+    game.players[1].hand = [card(9, 'target')];
+    const next = playCard(game, 'player-1', '6-x', { targetId: 'player-2' }, fixed);
+    expect(next.rankSixPlayed).toBe(2);
+    expect(next.players[0].eliminated).toBe(true);
+  });
+
   it('continues without elimination when a rank 6 duel is tied', () => {
     const game = base();
     game.phase = 'action';
