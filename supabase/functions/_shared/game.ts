@@ -31,6 +31,7 @@ export interface PendingEffect {
   actorId: string;
   targetId: string;
   blockReincarnation: boolean;
+  protectFromElimination?: boolean;
 }
 
 export interface GameResult {
@@ -62,6 +63,7 @@ export interface GameState {
 export interface PlayChoices {
   targetId?: string;
   guess?: number;
+  declaredRank?: number;
 }
 
 export interface PublicPlayer {
@@ -95,6 +97,12 @@ export interface PlayerView {
 
 const copy = <T>(value: T): T => structuredClone(value);
 const eventId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+export const JOKER_RANK = 0;
+export const JOKER_EFFECT_RANKS = [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12] as const;
+
+export function cardValue(card?: Card | null) {
+  return card?.rank === JOKER_RANK ? 10 : card?.rank ?? 0;
+}
 
 export function shuffle<T>(items: T[], rng: Rng = Math.random): T[] {
   const result = [...items];
@@ -156,9 +164,9 @@ function finishByRanks(state: GameState) {
   if (!alive.length) {
     state.result = { winners: [], reason: 'all-eliminated' };
   } else {
-    const highRank = Math.max(...alive.map((player) => player.hand[0]?.rank ?? 0));
+    const highRank = Math.max(...alive.map((player) => cardValue(player.hand[0])));
     state.result = {
-      winners: alive.filter((player) => (player.hand[0]?.rank ?? 0) === highRank).map((player) => player.id),
+      winners: alive.filter((player) => cardValue(player.hand[0]) === highRank).map((player) => player.id),
       reason: 'deck-exhausted',
       highRank,
     };
@@ -212,6 +220,20 @@ function reincarnate(state: GameState, player: PlayerState) {
   return true;
 }
 
+function resolveDoubleThirteen(state: GameState, player: PlayerState) {
+  if (player.hand.filter((card) => card.rank === 13).length < 2) return false;
+  state.discard.push(...player.hand);
+  player.hand = [];
+  log(state, `${player.name}の手に二枚の13が揃い、両方が墓地へ送られた。`);
+  if (!reincarnate(state, player)) {
+    player.eliminated = true;
+    player.guarded = false;
+    player.pendingScholar = false;
+    log(state, `${player.name}が卓を去った。`);
+  }
+  return true;
+}
+
 function eliminate(state: GameState, player: PlayerState, blockReincarnation = false) {
   const heldThirteen = player.hand.some((card) => card.rank === 13);
   state.discard.push(...player.hand);
@@ -242,15 +264,18 @@ function prepareDiscardEffect(
   kind: PendingEffect['kind'],
   blockReincarnation: boolean,
   rng: Rng,
+  protectFromElimination = false,
 ) {
   const drawn = drawOne(state, 'effect', rng);
   if (drawn) target.hand.push(drawn);
+  if (resolveDoubleThirteen(state, target)) return false;
   if (kind === 'masked-discard') target.hand = shuffle(target.hand, rng);
-  state.pendingEffect = { kind, actorId: actor.id, targetId: target.id, blockReincarnation };
+  state.pendingEffect = { kind, actorId: actor.id, targetId: target.id, blockReincarnation, protectFromElimination };
   state.phase = 'resolve';
   if (kind === 'public-execution') {
     log(state, `${target.name}の手札が公開された。`, { reveal: copy(target.hand), revealTitle: '公開処刑' });
   }
+  return true;
 }
 
 export function createGame(
@@ -260,6 +285,10 @@ export function createGame(
 ): GameState {
   if (playerNames.length < 2 || playerNames.length > 5) throw new Error('プレイヤーは2〜5人です');
   const cards: Card[] = [];
+  const jokerCount = Math.max(0, Math.floor(cardCounts[JOKER_RANK] ?? 0));
+  for (let index = 0; index < jokerCount; index += 1) {
+    cards.push({ id: `joker-${index}-${crypto.randomUUID()}`, rank: JOKER_RANK });
+  }
   for (let rank = 1; rank <= 13; rank += 1) {
     const count = Math.max(0, Math.floor(cardCounts[rank] ?? 0));
     for (let index = 0; index < count; index += 1) cards.push({ id: `${rank}-${index}-${crypto.randomUUID()}`, rank });
@@ -327,7 +356,8 @@ export function drawChoice(
     actor.pendingScholar = false;
     const card = drawOne(state, 'normal', rng);
     if (card) actor.hand.push(card);
-    state.phase = 'action';
+    if (resolveDoubleThirteen(state, actor)) finishTurn(state);
+    else state.phase = 'action';
     if (forgot) log(state, '忘れてやーんの', { privateTo: actor.id, kind: 'taunt' });
   }
   state.version += 1;
@@ -344,11 +374,13 @@ export function selectScholarCard(
   requireTurn(state, playerId, 'scholar-select');
   const selected = state.scholarCandidates.find((card) => card.id === cardId);
   if (!selected) throw new Error('選択できないカードです');
-  activePlayer(state).hand.push(selected);
+  const actor = activePlayer(state);
+  actor.hand.push(selected);
   state.deck.push(...state.scholarCandidates.filter((card) => card.id !== cardId));
   state.deck = shuffle(state.deck, rng);
   state.scholarCandidates = [];
-  state.phase = 'action';
+  if (resolveDoubleThirteen(state, actor)) finishTurn(state);
+  else state.phase = 'action';
   state.version += 1;
   return state;
 }
@@ -368,9 +400,20 @@ export function resolvePendingEffect(
   if (discarded) state.discard.push(discarded);
 
   if (discarded?.rank === 13) {
-    state.discard.push(...target.hand);
-    target.hand = [];
-    if (pending.blockReincarnation || !reincarnate(state, target)) {
+    if (pending.blockReincarnation) {
+      state.discard.push(...target.hand);
+      target.hand = [];
+      target.eliminated = true;
+      log(state, `${target.name}が卓を去った。`);
+    } else if (state.reincarnationCard) {
+      state.discard.push(...target.hand);
+      target.hand = [];
+      reincarnate(state, target);
+    } else if (pending.protectFromElimination) {
+      log(state, `${target.name}は13の処刑を免れた。`);
+    } else {
+      state.discard.push(...target.hand);
+      target.hand = [];
       target.eliminated = true;
       log(state, `${target.name}が卓を去った。`);
     }
@@ -395,36 +438,44 @@ export function playCard(
   if (cardIndex < 0) throw new Error('そのカードは手札にありません');
   const card = actor.hand[cardIndex];
   if (card.rank === 13) throw new Error('13は自分から場に出せません');
+  const isJoker = card.rank === JOKER_RANK;
+  const effectRank = isJoker ? Number(choices.declaredRank) : card.rank;
+  if (isJoker && !JOKER_EFFECT_RANKS.includes(effectRank as typeof JOKER_EFFECT_RANKS[number])) {
+    throw new Error('ジョーカーは9と13以外の効果を宣言してください');
+  }
   actor.hand.splice(cardIndex, 1);
   state.discard.push(card);
-  log(state, `${actor.name}が「${CARD_NAMES[card.rank]}」を使った。`);
+  log(state, isJoker
+    ? `${actor.name}が「ジョーカー」を${effectRank}（${CARD_NAMES[effectRank]}）として使った。`
+    : `${actor.name}が「${CARD_NAMES[card.rank]}」を使った。`);
 
   const guardedTarget = () => {
     const target = targetPlayer(state, actor.id, choices.targetId);
     return blockedByGuard(state, target) ? null : target;
   };
 
-  switch (card.rank) {
+  switch (effectRank) {
     case 1: {
       const previousOneCount = state.rankOnePlayed ?? Math.max(0, state.discard.filter((item) => item.rank === 1).length - 1);
-      state.rankOnePlayed = previousOneCount + 1;
-      if (state.rankOnePlayed >= 2) {
+      if (!isJoker) state.rankOnePlayed = previousOneCount + 1;
+      if (previousOneCount >= 1) {
         const target = guardedTarget();
-        if (target) prepareDiscardEffect(state, actor, target, 'public-execution', false, rng);
-        else finishTurn(state);
+        if (target) {
+          if (!prepareDiscardEffect(state, actor, target, 'public-execution', false, rng, true)) finishTurn(state);
+        } else finishTurn(state);
       } else finishTurn(state);
       break;
     }
     case 2: {
       const target = guardedTarget();
-      if (target && target.hand[0]?.rank === choices.guess) eliminate(state, target);
+      if (target && cardValue(target.hand[0]) === choices.guess) eliminate(state, target);
       else if (target) log(state, '宣言は外れた。');
       finishTurn(state);
       break;
     }
     case 3: {
       const target = guardedTarget();
-      if (target) log(state, `${target.name}の手札は${target.hand[0]?.rank ?? 'なし'}。`, { privateTo: actor.id, reveal: copy(target.hand), revealTitle: '透視' });
+      if (target) log(state, `${target.name}の手札は${target.hand.length ? cardValue(target.hand[0]) : 'なし'}。`, { privateTo: actor.id, reveal: copy(target.hand), revealTitle: '透視' });
       finishTurn(state);
       break;
     }
@@ -434,20 +485,21 @@ export function playCard(
       break;
     case 5: {
       const target = guardedTarget();
-      if (target) prepareDiscardEffect(state, actor, target, 'masked-discard', false, rng);
-      else finishTurn(state);
+      if (target) {
+        if (!prepareDiscardEffect(state, actor, target, 'masked-discard', false, rng)) finishTurn(state);
+      } else finishTurn(state);
       break;
     }
     case 6: {
       const target = guardedTarget();
       if (target) {
-        const ownRank = actor.hand[0]?.rank ?? 0;
-        const targetRank = target.hand[0]?.rank ?? 0;
+        const ownRank = cardValue(actor.hand[0]);
+        const targetRank = cardValue(target.hand[0]);
         const ownHand = copy(actor.hand);
         const targetHand = copy(target.hand);
         const previousSixCount = state.rankSixPlayed ?? Math.max(0, state.discard.filter((item) => item.rank === 6).length - 1);
-        state.rankSixPlayed = previousSixCount + 1;
-        const isDuel = state.rankSixPlayed >= 2;
+        if (!isJoker) state.rankSixPlayed = previousSixCount + 1;
+        const isDuel = previousSixCount >= 1;
         if (isDuel) {
           if (ownRank < targetRank) eliminate(state, actor);
           else if (targetRank < ownRank) eliminate(state, target);
@@ -472,8 +524,9 @@ export function playCard(
     }
     case 9: {
       const target = guardedTarget();
-      if (target) prepareDiscardEffect(state, actor, target, 'public-execution', true, rng);
-      else finishTurn(state);
+      if (target) {
+        if (!prepareDiscardEffect(state, actor, target, 'public-execution', true, rng)) finishTurn(state);
+      } else finishTurn(state);
       break;
     }
     case 10: {
@@ -556,11 +609,13 @@ export function projectForPlayer(state: GameState, viewerId: string): PlayerView
 }
 
 export const CARD_NAMES: Record<number, string> = {
+  0: 'ジョーカー',
   1: '革命', 2: '捜査', 3: '透視', 4: '静寂', 5: '疫病', 6: '対面・対決', 7: '選択',
   8: '交換', 9: '公開処刑', 10: '強制転生', 11: '跳躍', 12: '全体転生', 13: '潜伏・転生',
 };
 
 export const CARD_DESCRIPTIONS: Record<number, string> = {
+  0: '数値は10。使用時に9・13以外の階位を宣言し、その効果を使う。1・6の使用回数には数えない。',
   1: '二枚目以降は公開処刑へ変わる。',
   2: '相手の階位を言い当てる。',
   3: 'ひとりの手札を自分だけが見る。',
@@ -573,5 +628,5 @@ export const CARD_DESCRIPTIONS: Record<number, string> = {
   10: '手札をすべて捨て、新しい一枚を引く。',
   11: '次のプレイヤーの手番を飛ばす。',
   12: '自分以外の手札を順に生まれ変わらせる。',
-  13: '自分から出せず、捨てられると転生する。',
+  13: '自分から出せず、捨てられると転生する。二枚揃うと両方を捨てて転生する。',
 };

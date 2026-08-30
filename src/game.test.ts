@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  createGame, drawChoice, playCard, projectForPlayer, resolvePendingEffect,
+  createGame, drawChoice, playCard, projectForPlayer, resolvePendingEffect, selectScholarCard,
   type Card, type GameState,
 } from '../supabase/functions/_shared/game';
 import { STARTER_COUNTS } from './lib/presets';
@@ -13,6 +13,12 @@ function base(): GameState {
 }
 
 describe('game engine', () => {
+  it('adds configurable joker cards to the deck', () => {
+    const game = createGame(['A', 'B'], { 0: 1, 1: 3 }, fixed);
+    const allCards = [game.reincarnationCard, ...game.deck, ...game.players.flatMap((player) => player.hand)].filter(Boolean) as Card[];
+    expect(allCards.filter((item) => item.rank === 0)).toHaveLength(1);
+  });
+
   it('never exposes another player hand or hidden guard state', () => {
     const game = base();
     game.players[1].guarded = true;
@@ -217,5 +223,119 @@ describe('game engine', () => {
     const next = playCard(game, 'player-1', '10-x', {}, fixed);
     expect(next.result?.reason).toBe('deck-exhausted');
     expect(next.players[0].hand[0]?.rank).toBe(6);
+  });
+
+  it('discards both rank 13 cards and reincarnates when a second 13 is drawn', () => {
+    const game = base();
+    game.players[0].hand = [card(13, 'held')];
+    game.deck = [card(4, 'spare'), card(13, 'drawn')];
+    game.reincarnationCard = card(8, 'reborn');
+    const next = drawChoice(game, 'player-1', 'one', fixed);
+    expect(next.discard.map((item) => item.id)).toEqual(expect.arrayContaining(['13-held', '13-drawn']));
+    expect(next.players[0].hand.map((item) => item.id)).toEqual(['8-reborn']);
+    expect(next.players[0].eliminated).toBe(false);
+    expect(next.turnIndex).toBe(1);
+  });
+
+  it('discards both rank 13 cards after selecting the second one from three futures', () => {
+    const game = base();
+    game.phase = 'scholar-select';
+    game.players[0].hand = [card(13, 'held')];
+    game.scholarCandidates = [card(13, 'chosen'), card(4, 'other-a'), card(5, 'other-b')];
+    game.reincarnationCard = card(7, 'reborn');
+    const next = selectScholarCard(game, 'player-1', '13-chosen', fixed);
+    expect(next.discard.map((item) => item.id)).toEqual(expect.arrayContaining(['13-held', '13-chosen']));
+    expect(next.players[0].hand.map((item) => item.id)).toEqual(['7-reborn']);
+    expect(next.turnIndex).toBe(1);
+  });
+
+  it('does not eliminate a rank 13 discarded by rank 1 public execution when reincarnation is unavailable', () => {
+    const game = base();
+    game.phase = 'action';
+    game.rankOnePlayed = 1;
+    game.reincarnationCard = null;
+    game.deck = [card(8, 'spare'), card(4, 'drawn')];
+    game.players[0].hand = [card(1), card(2, 'keep')];
+    game.players[1].hand = [card(13, 'target')];
+    const pending = playCard(game, 'player-1', '1-x', { targetId: 'player-2' }, fixed);
+    const next = resolvePendingEffect(pending, 'player-1', 0);
+    expect(next.players[1].eliminated).toBe(false);
+    expect(next.players[1].hand.map((item) => item.id)).toEqual(['4-drawn']);
+  });
+
+  it('treats the joker as value 10 for guesses and final comparison', () => {
+    const guessed = base();
+    guessed.phase = 'action';
+    guessed.players[0].hand = [card(2), card(4, 'keep')];
+    guessed.players[1].hand = [card(0, 'joker')];
+    const afterGuess = playCard(guessed, 'player-1', '2-x', { targetId: 'player-2', guess: 10 }, fixed);
+    expect(afterGuess.players[1].eliminated).toBe(true);
+
+    const final = base();
+    final.phase = 'action';
+    final.endAfterResolution = true;
+    final.players[0].hand = [card(11), card(0, 'joker')];
+    final.players[1].hand = [card(9, 'other')];
+    final.players[2].eliminated = true;
+    const result = playCard(final, 'player-1', '11-x', {}, fixed);
+    expect(result.result?.highRank).toBe(10);
+    expect(result.result?.winners).toEqual(['player-1']);
+  });
+
+  it('uses a joker as the declared effect while rejecting 9 and 13', () => {
+    const game = base();
+    game.phase = 'action';
+    game.players[0].hand = [card(0, 'joker'), card(3, 'old')];
+    game.deck = [card(8, 'spare'), card(5, 'new')];
+    const next = playCard(game, 'player-1', '0-joker', { declaredRank: 10 }, fixed);
+    expect(next.discard.map((item) => item.id)).toEqual(expect.arrayContaining(['0-joker', '3-old']));
+    expect(next.players[0].hand.map((item) => item.id)).toEqual(['5-new']);
+
+    const invalid = base();
+    invalid.phase = 'action';
+    invalid.players[0].hand = [card(0, 'invalid'), card(4, 'keep')];
+    expect(() => playCard(invalid, 'player-1', '0-invalid', { declaredRank: 9 }, fixed)).toThrow(/9と13以外/);
+    expect(() => playCard(invalid, 'player-1', '0-invalid', { declaredRank: 13 }, fixed)).toThrow(/9と13以外/);
+  });
+
+  it('does not count a joker declared as the first rank 1 or rank 6', () => {
+    const asOne = base();
+    asOne.phase = 'action';
+    asOne.rankOnePlayed = 0;
+    asOne.players[0].hand = [card(0, 'one'), card(8, 'keep')];
+    const afterOne = playCard(asOne, 'player-1', '0-one', { declaredRank: 1 }, fixed);
+    expect(afterOne.rankOnePlayed).toBe(0);
+    expect(afterOne.pendingEffect).toBeNull();
+
+    const asSix = base();
+    asSix.phase = 'action';
+    asSix.rankSixPlayed = 0;
+    asSix.players[0].hand = [card(0, 'six'), card(9, 'actor')];
+    asSix.players[1].hand = [card(4, 'target')];
+    const afterSix = playCard(asSix, 'player-1', '0-six', { declaredRank: 6, targetId: 'player-2' }, fixed);
+    expect(afterSix.rankSixPlayed).toBe(0);
+    expect(afterSix.players[1].eliminated).toBe(false);
+    expect(projectForPlayer(afterSix, 'player-1').events.at(-1)?.revealTitle).toBe('対面');
+  });
+
+  it('lets a joker reuse later rank 1 and rank 6 effects without increasing their counters', () => {
+    const asOne = base();
+    asOne.phase = 'action';
+    asOne.rankOnePlayed = 1;
+    asOne.players[0].hand = [card(0, 'one'), card(8, 'keep')];
+    asOne.players[1].hand = [card(4, 'target')];
+    const afterOne = playCard(asOne, 'player-1', '0-one', { declaredRank: 1, targetId: 'player-2' }, fixed);
+    expect(afterOne.rankOnePlayed).toBe(1);
+    expect(afterOne.pendingEffect?.kind).toBe('public-execution');
+
+    const asSix = base();
+    asSix.phase = 'action';
+    asSix.rankSixPlayed = 1;
+    asSix.players[0].hand = [card(0, 'six'), card(9, 'actor')];
+    asSix.players[1].hand = [card(4, 'target')];
+    const afterSix = playCard(asSix, 'player-1', '0-six', { declaredRank: 6, targetId: 'player-2' }, fixed);
+    expect(afterSix.rankSixPlayed).toBe(1);
+    expect(afterSix.players[1].eliminated).toBe(true);
+    expect(projectForPlayer(afterSix, 'player-1').events.at(-1)?.revealTitle).toBe('対決');
   });
 });

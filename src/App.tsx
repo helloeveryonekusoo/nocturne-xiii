@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  CARD_DESCRIPTIONS, CARD_NAMES, createGame, drawChoice, playCard, projectForPlayer,
+  CARD_DESCRIPTIONS, CARD_NAMES, JOKER_EFFECT_RANKS, JOKER_RANK, cardValue, createGame, drawChoice, playCard, projectForPlayer,
   resolvePendingEffect, selectScholarCard, type Card, type GameEvent, type GameState, type PlayerView,
 } from '../supabase/functions/_shared/game';
 import {
-  exportPreset, readPresets, STARTER_COUNTS, validateCounts, writePresets,
+  CARD_RANKS, exportPreset, normalizeCounts, readPresets, STARTER_COUNTS, validateCounts, writePresets,
   type CardCounts, type SavedPreset,
 } from './lib/presets';
 import { onlineApi, onlineConfigured, type LobbySnapshot, type RoomSnapshot } from './lib/online';
@@ -14,11 +14,13 @@ type MotionMode = 'normal' | 'fast' | 'reduced';
 type SyncState = 'idle' | 'sending' | 'synced' | 'error';
 const PLAYER_ID = 'player-1';
 const SIGILS: Record<number, string> = {
+  0: '✺',
   1: 'Ⅰ', 2: '⌖', 3: '◉', 4: '◇', 5: '✣', 6: '⚔', 7: '△',
   8: '∞', 9: '♛', 10: '↻', 11: '»', 12: '✦', 13: '☼',
 };
 
 const id = () => crypto.randomUUID();
+const cardDisplayValue = (card?: Card) => card?.rank === JOKER_RANK ? 'J／10' : card?.rank ?? '—';
 const savedName = () => {
   try { return globalThis.localStorage?.getItem('nocturne-name') || '旅人'; }
   catch { return '旅人'; }
@@ -31,9 +33,10 @@ const savedMotionMode = (): MotionMode => {
 };
 
 function CardArtwork({ card, compact = false }: { card: Card; compact?: boolean }) {
+  const isJoker = card.rank === JOKER_RANK;
   return (
     <>
-      <span className="card-rank"><small>RANK</small>{card.rank}</span>
+      <span className="card-rank"><small>{isJoker ? 'WILD' : 'RANK'}</small>{isJoker ? 'JOKER' : card.rank}</span>
       <span className="card-sigil" aria-hidden="true">{SIGILS[card.rank]}</span>
       <span className="card-title">{CARD_NAMES[card.rank]}</span>
       {!compact && <span className="card-copy">{CARD_DESCRIPTIONS[card.rank]}</span>}
@@ -51,7 +54,7 @@ function CardFace({ card, onClick, disabled, compact = false, disabledReason }: 
       type="button"
       onClick={onClick}
       disabled={disabled}
-      aria-label={`${card.rank} ${CARD_NAMES[card.rank]}`}
+      aria-label={card.rank === JOKER_RANK ? 'ジョーカー 数値10' : `${card.rank} ${CARD_NAMES[card.rank]}`}
     >
       <CardArtwork card={card} compact={compact} />
       {onClick && !disabled && !compact && <span className="card-action-hint">選んで使う</span>}
@@ -67,7 +70,7 @@ export function CardRevealModal({ event, onNext }: { event: GameEvent; onNext: (
         <small>{event.revealTitle ?? 'CARD REVEAL'}</small>
         <h3 id="reveal-title">相手のカードを確認</h3>
         <p>{event.text}</p>
-        <div className="reveal-cards">{event.reveal?.map((card) => <div className="card-face reveal-card" role="img" aria-label={`${card.rank} ${CARD_NAMES[card.rank]}`} key={card.id}><CardArtwork card={card} /></div>)}</div>
+        <div className="reveal-cards">{event.reveal?.map((card) => <div className="card-face reveal-card" role="img" aria-label={card.rank === JOKER_RANK ? 'ジョーカー 数値10' : `${card.rank} ${CARD_NAMES[card.rank]}`} key={card.id}><CardArtwork card={card} /></div>)}</div>
         <button className="primary-button reveal-next" type="button" onClick={onNext}>次へ <span>→</span></button>
       </div>
     </div>
@@ -250,6 +253,7 @@ export default function App() {
   const [targeting, setTargeting] = useState<Card | null>(null);
   const [selectedTarget, setSelectedTarget] = useState('');
   const [guess, setGuess] = useState(13);
+  const [jokerEffectRank, setJokerEffectRank] = useState<number>(10);
   const [toast, setToast] = useState('');
   const [busy, setBusy] = useState(false);
   const [graveOpen, setGraveOpen] = useState(false);
@@ -276,10 +280,14 @@ export default function App() {
     : null;
   const visibleDiscard = useMemo(() => {
     const cards = [...(view?.discard ?? [])];
-    if (graveSort === 'rank-asc') cards.sort((left, right) => left.rank - right.rank);
-    if (graveSort === 'rank-desc') cards.sort((left, right) => right.rank - left.rank);
+    if (graveSort === 'rank-asc') cards.sort((left, right) => cardValue(left) - cardValue(right));
+    if (graveSort === 'rank-desc') cards.sort((left, right) => cardValue(right) - cardValue(left));
     return cards;
   }, [graveSort, view?.discard]);
+  const targetingEffectRank = targeting?.rank === JOKER_RANK ? jokerEffectRank : targeting?.rank;
+  const targetingActiveOne = targetingEffectRank === 1 && (view?.rankOnePlayed ?? 0) >= 1;
+  const targetingNeedsPlayer = targetingEffectRank !== undefined
+    && ([2, 3, 5, 6, 8, 9].includes(targetingEffectRank) || targetingActiveOne);
 
   useEffect(() => {
     document.documentElement.scrollTop = 0;
@@ -310,7 +318,7 @@ export default function App() {
     if (snapshot.lobby) {
       setLobby(snapshot.lobby);
       setMaxPlayers(snapshot.lobby.maxPlayers);
-      if (!editingCounts.current) setCounts({ ...snapshot.lobby.counts });
+      if (!editingCounts.current) setCounts(normalizeCounts(snapshot.lobby.counts));
       setOnlineView(null);
       setScreen('lobby');
     } else if (snapshot.view) {
@@ -355,7 +363,7 @@ export default function App() {
         } else if (game.phase === 'resolve') {
           const target = game.players.find((player) => player.id === game.pendingEffect?.targetId);
           const index = game.pendingEffect?.kind === 'public-execution'
-            ? Math.max(0, (target?.hand ?? []).reduce((best, card, index, hand) => card.rank > hand[best].rank ? index : best, 0))
+            ? Math.max(0, (target?.hand ?? []).reduce((best, card, index, hand) => cardValue(card) > cardValue(hand[best]) ? index : best, 0))
             : Math.floor(Math.random() * Math.max(1, target?.hand.length ?? 1));
           next = resolvePendingEffect(game, bot.id, index);
         } else if (game.phase === 'action') {
@@ -364,7 +372,10 @@ export default function App() {
           if (!card) return;
           const targets = game.players.filter((player) => !player.eliminated && player.id !== bot.id);
           const target = targets[Math.floor(Math.random() * targets.length)];
-          next = playCard(game, bot.id, card.id, { targetId: target?.id, guess: 1 + Math.floor(Math.random() * 13) });
+          const declaredRank = card.rank === JOKER_RANK
+            ? JOKER_EFFECT_RANKS[Math.floor(Math.random() * JOKER_EFFECT_RANKS.length)]
+            : undefined;
+          next = playCard(game, bot.id, card.id, { targetId: target?.id, guess: 1 + Math.floor(Math.random() * 13), declaredRank });
         }
         setGame(next);
       } catch (error) {
@@ -488,7 +499,7 @@ export default function App() {
   const closeSettings = () => {
     editingCounts.current = false;
     setSettingsOpen(false);
-    if (onlineConfigured && lobby) setCounts({ ...lobby.counts });
+    if (onlineConfigured && lobby) setCounts(normalizeCounts(lobby.counts));
   };
 
   const applySettings = async () => {
@@ -503,6 +514,9 @@ export default function App() {
   const chooseCard = (card: Card) => {
     if (!view || !isMyTurn || view.phase !== 'action' || busy) return;
     if (card.rank === 13) return flash('13は自分から場に出せません');
+    if (card.rank === JOKER_RANK) {
+      setTargeting(card); setSelectedTarget(''); setJokerEffectRank(10); return;
+    }
     const activeOne = card.rank === 1 && view.rankOnePlayed >= 1;
     if ([2, 3, 5, 6, 8, 9].includes(card.rank) || activeOne) {
       setTargeting(card); setSelectedTarget(''); return;
@@ -515,8 +529,16 @@ export default function App() {
   };
 
   const confirmTarget = () => {
-    if (!targeting || !selectedTarget || busy) return;
-    const choices = { targetId: selectedTarget, guess };
+    if (!targeting || busy) return;
+    const effectRank = targeting.rank === JOKER_RANK ? jokerEffectRank : targeting.rank;
+    const activeOne = effectRank === 1 && (view?.rankOnePlayed ?? 0) >= 1;
+    const targetRequired = [2, 3, 5, 6, 8, 9].includes(effectRank) || activeOne;
+    if (targetRequired && !selectedTarget) return;
+    const choices = {
+      targetId: targetRequired ? selectedTarget : undefined,
+      guess,
+      declaredRank: targeting.rank === JOKER_RANK ? jokerEffectRank : undefined,
+    };
     if (onlineConfigured) {
       void sendOnlineCommand({ type: 'play', cardId: targeting.id, choices });
       setTargeting(null); setSelectedTarget('');
@@ -607,7 +629,7 @@ export default function App() {
             </section>
             <aside className="setup-panel">
               <div className="panel-heading"><div><small>DECK SETTING</small><h3>カード構成</h3></div>{(!onlineConfigured || lobby?.isHost) && <button onClick={openSettings}>詳しく編集</button>}</div>
-              <div className="deck-summary">{Array.from({ length: 13 }, (_, index) => index + 1).map((rank) => <div key={rank}><span>{rank}</span><strong>×{counts[rank]}</strong></div>)}</div>
+              <div className="deck-summary">{CARD_RANKS.map((rank) => <div className={rank === JOKER_RANK ? 'joker-summary' : ''} key={rank}><span>{rank === JOKER_RANK ? 'J' : rank}</span><strong>×{counts[rank] ?? 0}</strong></div>)}</div>
               <div className="summary-row"><span>合計枚数</span><strong>{Object.values(counts).reduce((a, b) => a + b, 0)}枚</strong></div>
               <label className="player-limit">上限人数<select value={maxPlayers} disabled={onlineConfigured && !lobby?.isHost} onChange={(event) => { const next = Number(event.target.value); setMaxPlayers(next); void configureOnlineRoom(next, counts); }}>{[2,3,4,5].map((value) => <option key={value}>{value}</option>)}</select></label>
               {(!onlineConfigured || lobby?.isHost)
@@ -653,17 +675,17 @@ export default function App() {
             : Array.from({ length: view.pendingTargetHandCount }, (_, index) => <button className="mystery-card" key={index} onClick={() => resolveEffect(index)} disabled={busy}><span>XIII</span><strong>{index === 0 ? '左' : '右'}を選ぶ</strong></button>)}</div></div></div>}
           {visibleRevealEvent && <CardRevealModal event={visibleRevealEvent} onNext={() => setDismissedRevealId(visibleRevealEvent.id)} />}
           {logOpen && <GameLogModal events={view.events} onClose={() => setLogOpen(false)} />}
-          {view.result && <div className="modal-backdrop result-backdrop"><div className="result-modal"><small>THE NIGHT IS OVER</small><h2>{view.result.winners.includes(playerId) ? 'あなたの勝利' : view.result.winners.length ? `${view.players.find((player) => player.id === view.result?.winners[0])?.name}の勝利` : '引き分け'}</h2><p>{view.result.reason === 'deck-exhausted' ? '最後に残った階位が夜会の行方を決めました。' : '最後まで卓に残った者が運命を掴みました。'}</p><div className="final-hands">{view.players.map((player) => <div key={player.id}><span>{player.name}</span><strong>{player.ownHand?.[0]?.rank ?? '—'}</strong></div>)}</div>{(!onlineConfigured || lobby?.isHost) ? <button className="primary-button" onClick={startGame} disabled={busy}>同じ構成でもう一度 <span>↻</span></button> : <p>ホストの再開を待っています</p>}<button className="ghost-button" onClick={goHome}>タイトルへ戻る</button></div></div>}
+          {view.result && <div className="modal-backdrop result-backdrop"><div className="result-modal"><small>THE NIGHT IS OVER</small><h2>{view.result.winners.includes(playerId) ? 'あなたの勝利' : view.result.winners.length ? `${view.players.find((player) => player.id === view.result?.winners[0])?.name}の勝利` : '引き分け'}</h2><p>{view.result.reason === 'deck-exhausted' ? '最後に残った数値が夜会の行方を決めました。' : '最後まで卓に残った者が運命を掴みました。'}</p><div className="final-hands">{view.players.map((player) => <div key={player.id}><span>{player.name}</span><strong>{cardDisplayValue(player.ownHand?.[0])}</strong></div>)}</div>{(!onlineConfigured || lobby?.isHost) ? <button className="primary-button" onClick={startGame} disabled={busy}>同じ構成でもう一度 <span>↻</span></button> : <p>ホストの再開を待っています</p>}<button className="ghost-button" onClick={goHome}>タイトルへ戻る</button></div></div>}
         </main>
       )}
 
-      {targeting && view && <div className="modal-backdrop"><div className="choice-modal target-modal"><small>TARGET</small><h3>「{CARD_NAMES[targeting.rank]}」の対象</h3><div className="target-list">{view.players.filter((player) => player.id !== playerId && !player.eliminated).map((player) => <button className={selectedTarget === player.id ? 'selected' : ''} key={player.id} onClick={() => setSelectedTarget(player.id)}><span className="avatar">{player.name.slice(0,1)}</span><strong>{player.name}</strong><span>選択</span></button>)}</div>{targeting.rank === 2 && <label className="guess-field">宣言する階位<select value={guess} onChange={(event) => setGuess(Number(event.target.value))}>{Array.from({ length: 13 }, (_, index) => index + 1).map((rank) => <option key={rank}>{rank}</option>)}</select></label>}<div className="modal-actions"><button className="ghost-button" onClick={() => setTargeting(null)}>戻る</button><button className="primary-button" disabled={!selectedTarget || busy} onClick={confirmTarget}>効果を使う</button></div></div></div>}
+      {targeting && view && <div className="modal-backdrop"><div className="choice-modal target-modal"><small>{targeting.rank === JOKER_RANK ? 'DECLARE EFFECT' : 'TARGET'}</small><h3>{targeting.rank === JOKER_RANK ? 'ジョーカーの効果を宣言' : `「${CARD_NAMES[targeting.rank]}」の対象`}</h3>{targeting.rank === JOKER_RANK && <label className="joker-declaration"><span>使用する階位</span><select aria-label="ジョーカーで宣言する階位" value={jokerEffectRank} onChange={(event) => { setJokerEffectRank(Number(event.target.value)); setSelectedTarget(''); }}>{JOKER_EFFECT_RANKS.map((rank) => <option value={rank} key={rank}>{rank} · {CARD_NAMES[rank]}</option>)}</select><small>9と13は宣言できません。1・6として使っても使用回数には数えません。</small></label>}<div className="declared-effect"><strong>{targetingEffectRank} · {CARD_NAMES[targetingEffectRank ?? 10]}</strong><p>{CARD_DESCRIPTIONS[targetingEffectRank ?? 10]}</p></div>{targetingNeedsPlayer && <div className="target-list">{view.players.filter((player) => player.id !== playerId && !player.eliminated).map((player) => <button className={selectedTarget === player.id ? 'selected' : ''} key={player.id} onClick={() => setSelectedTarget(player.id)}><span className="avatar">{player.name.slice(0,1)}</span><strong>{player.name}</strong><span>{selectedTarget === player.id ? '選択中' : '選択'}</span></button>)}</div>}{targetingEffectRank === 2 && <label className="guess-field">言い当てる階位<select value={guess} onChange={(event) => setGuess(Number(event.target.value))}>{Array.from({ length: 13 }, (_, index) => index + 1).map((rank) => <option key={rank}>{rank}</option>)}</select></label>}<div className="modal-actions"><button className="ghost-button" onClick={() => setTargeting(null)}>戻る</button><button className="primary-button" disabled={(targetingNeedsPlayer && !selectedTarget) || busy} onClick={confirmTarget}>{busy ? '反映中…' : 'この効果を使う'}</button></div></div></div>}
 
-      {settingsOpen && <div className="modal-backdrop"><div className="settings-modal"><div className="modal-heading"><div><small>DECK ARCHIVE</small><h3>カード構成を編集</h3></div><button onClick={closeSettings}>×</button></div><div className="preset-bar"><select value={selectedPreset} onChange={(event) => { setSelectedPreset(event.target.value); const preset = presets.find((item) => item.id === event.target.value); if (preset) setCounts({ ...preset.counts }); }}><option value="">保存した構成を選択</option>{presets.map((preset) => <option value={preset.id} key={preset.id}>{preset.name}</option>)}</select><input className="preset-name" aria-label="保存する構成名" maxLength={24} placeholder="構成名を入力" value={presetName} onChange={(event) => setPresetName(event.target.value)} /><button onClick={savePreset} disabled={!presetName.trim()}>名前を付けて保存</button></div><div className="count-editor">{Array.from({ length: 13 }, (_, index) => index + 1).map((rank) => <div key={rank}><span className="mini-sigil">{SIGILS[rank]}</span><label><strong>{rank}</strong><small>{CARD_NAMES[rank]}</small></label><div className="stepper"><button onClick={() => updateCount(rank, -1)}>−</button><input type="number" min="0" max="20" value={counts[rank]} onChange={(event) => setCounts((current) => ({ ...current, [rank]: Math.max(0, Math.min(20, Number(event.target.value) || 0)) }))} /><button onClick={() => updateCount(rank, 1)}>＋</button></div></div>)}</div><div className="settings-footer"><div><strong>合計 {Object.values(counts).reduce((a,b) => a+b,0)}枚</strong><small>{validateCounts(counts, players.length) || 'この構成で開始できます'}</small></div><div className="preset-actions">{selectedPreset && <><button onClick={() => { const preset = presets.find((item) => item.id === selectedPreset); if (preset) exportPreset(preset); }}>書き出す</button><button onClick={() => { const next = presets.filter((item) => item.id !== selectedPreset); setPresets(next); writePresets(next); setSelectedPreset(''); }}>削除</button></>}<button className="primary-button" onClick={() => void applySettings()}>構成を適用</button></div></div></div></div>}
+      {settingsOpen && <div className="modal-backdrop"><div className="settings-modal"><div className="modal-heading"><div><small>DECK ARCHIVE</small><h3>カード構成を編集</h3></div><button onClick={closeSettings}>×</button></div><div className="preset-bar"><select value={selectedPreset} onChange={(event) => { setSelectedPreset(event.target.value); const preset = presets.find((item) => item.id === event.target.value); if (preset) setCounts(normalizeCounts(preset.counts)); }}><option value="">保存した構成を選択</option>{presets.map((preset) => <option value={preset.id} key={preset.id}>{preset.name}</option>)}</select><input className="preset-name" aria-label="保存する構成名" maxLength={24} placeholder="構成名を入力" value={presetName} onChange={(event) => setPresetName(event.target.value)} /><button onClick={savePreset} disabled={!presetName.trim()}>名前を付けて保存</button></div><div className="count-editor">{CARD_RANKS.map((rank) => <div className={rank === JOKER_RANK ? 'joker-count-row' : ''} key={rank}><span className="mini-sigil">{SIGILS[rank]}</span><label><strong>{rank === JOKER_RANK ? 'JOKER' : rank}</strong><small>{CARD_NAMES[rank]}</small></label><div className="stepper"><button onClick={() => updateCount(rank, -1)} aria-label={`${CARD_NAMES[rank]}を1枚減らす`}>−</button><input aria-label={`${CARD_NAMES[rank]}の枚数`} type="number" min="0" max="20" value={counts[rank] ?? 0} onChange={(event) => setCounts((current) => ({ ...current, [rank]: Math.max(0, Math.min(20, Number(event.target.value) || 0)) }))} /><button onClick={() => updateCount(rank, 1)} aria-label={`${CARD_NAMES[rank]}を1枚増やす`}>＋</button></div></div>)}</div><div className="settings-footer"><div><strong>合計 {Object.values(counts).reduce((a,b) => a+b,0)}枚</strong><small>{validateCounts(counts, players.length) || 'この構成で開始できます'}</small></div><div className="preset-actions">{selectedPreset && <><button onClick={() => { const preset = presets.find((item) => item.id === selectedPreset); if (preset) exportPreset(preset); }}>書き出す</button><button onClick={() => { const next = presets.filter((item) => item.id !== selectedPreset); setPresets(next); writePresets(next); setSelectedPreset(''); }}>削除</button></>}<button className="primary-button" onClick={() => void applySettings()}>構成を適用</button></div></div></div></div>}
 
-      {graveOpen && view && <div className="modal-backdrop grave-backdrop" role="dialog" aria-modal="true" aria-labelledby="grave-title"><div className="grave-modal"><div className="modal-heading"><div><small>GRAVE ARCHIVE</small><h3 id="grave-title">墓地のカード</h3></div><button type="button" onClick={() => setGraveOpen(false)} aria-label="墓地を閉じる">×</button></div><div className="grave-tools"><span>全{view.discard.length}枚</span><label>並び順<select aria-label="墓地の並び順" value={graveSort} onChange={(event) => setGraveSort(event.target.value as typeof graveSort)}><option value="played">捨てられた順</option><option value="rank-asc">数字の小さい順</option><option value="rank-desc">数字の大きい順</option></select></label></div><div className="grave-grid">{visibleDiscard.map((card, index) => <div className="grave-entry" key={`${card.id}-${index}`}><span className="grave-order">{graveSort === 'played' ? `${index + 1}枚目` : `階位 ${card.rank}`}</span><div className="card-face grave-card" role="img" aria-label={`${card.rank} ${CARD_NAMES[card.rank]}`}><CardArtwork card={card} /></div></div>)}</div><div className="grave-footer"><button className="primary-button" type="button" onClick={() => setGraveOpen(false)}>盤面に戻る</button></div></div></div>}
+      {graveOpen && view && <div className="modal-backdrop grave-backdrop" role="dialog" aria-modal="true" aria-labelledby="grave-title"><div className="grave-modal"><div className="modal-heading"><div><small>GRAVE ARCHIVE</small><h3 id="grave-title">墓地のカード</h3></div><button type="button" onClick={() => setGraveOpen(false)} aria-label="墓地を閉じる">×</button></div><div className="grave-tools"><span>全{view.discard.length}枚</span><label>並び順<select aria-label="墓地の並び順" value={graveSort} onChange={(event) => setGraveSort(event.target.value as typeof graveSort)}><option value="played">捨てられた順</option><option value="rank-asc">数字の小さい順</option><option value="rank-desc">数字の大きい順</option></select></label></div><div className="grave-grid">{visibleDiscard.map((card, index) => <div className="grave-entry" key={`${card.id}-${index}`}><span className="grave-order">{graveSort === 'played' ? `${index + 1}枚目` : `数値 ${cardValue(card)}`}</span><div className="card-face grave-card" role="img" aria-label={card.rank === JOKER_RANK ? 'ジョーカー 数値10' : `${card.rank} ${CARD_NAMES[card.rank]}`}><CardArtwork card={card} /></div></div>)}</div><div className="grave-footer"><button className="primary-button" type="button" onClick={() => setGraveOpen(false)}>盤面に戻る</button></div></div></div>}
 
-      {rulesOpen && <div className="rules-backdrop" onClick={() => setRulesOpen(false)}><aside className="rules-drawer" onClick={(event) => event.stopPropagation()}><div className="modal-heading"><div><small>RULE BOOK</small><h3>13階位の効果</h3></div><button onClick={() => setRulesOpen(false)}>×</button></div><p className="rules-intro">一枚引き、一枚を使う。山札が尽きれば、最後に持つ階位が最も高い者の勝利。</p><div className="rule-list">{Array.from({ length: 13 }, (_, index) => index + 1).map((rank) => <article key={rank}><span>{rank}</span><div><strong>{CARD_NAMES[rank]}</strong><p>{CARD_DESCRIPTIONS[rank]}</p></div><i>{SIGILS[rank]}</i></article>)}</div></aside></div>}
+      {rulesOpen && <div className="rules-backdrop" onClick={() => setRulesOpen(false)}><aside className="rules-drawer" onClick={(event) => event.stopPropagation()}><div className="modal-heading"><div><small>RULE BOOK</small><h3>カードの効果</h3></div><button onClick={() => setRulesOpen(false)}>×</button></div><p className="rules-intro">一枚引き、一枚を使う。ジョーカーの数値は10。山札が尽きれば、最後に持つ数値が最も高い者の勝利。</p><div className="rule-list">{CARD_RANKS.map((rank) => <article className={rank === JOKER_RANK ? 'joker-rule' : ''} key={rank}><span>{rank === JOKER_RANK ? 'J' : rank}</span><div><strong>{CARD_NAMES[rank]}</strong><p>{CARD_DESCRIPTIONS[rank]}</p></div><i>{SIGILS[rank]}</i></article>)}</div></aside></div>}
       <TauntNotice event={latestEvent} />
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>

@@ -22,6 +22,7 @@ describe('Nocturne XIII interface', () => {
     fireEvent.click(screen.getByRole('button', { name: '詳しく編集' }));
     expect(screen.getByLabelText('保存する構成名')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '名前を付けて保存' })).toBeDisabled();
+    expect(screen.getByLabelText('ジョーカーの枚数')).toHaveValue(1);
   });
 
   it('shows revealed opponent cards at a readable size with an explicit next action', () => {

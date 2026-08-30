@@ -6,19 +6,27 @@ export interface SavedPreset {
   counts: CardCounts;
 }
 
-export const STARTER_COUNTS: CardCounts = Object.fromEntries(
-  Array.from({ length: 13 }, (_, index) => [index + 1, index < 8 ? 2 : 1]),
-);
+export const CARD_RANKS = [...Array.from({ length: 13 }, (_, index) => index + 1), 0];
+
+export const STARTER_COUNTS: CardCounts = {
+  ...Object.fromEntries(Array.from({ length: 13 }, (_, index) => [index + 1, index < 8 ? 2 : 1])),
+  0: 1,
+};
 
 const STORAGE_KEY = 'nocturne-xiii-presets-v1';
 
 export function readPresets(): SavedPreset[] {
   if (typeof window === 'undefined') return [];
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]') as SavedPreset[];
+    const presets = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]') as SavedPreset[];
+    return presets.map((preset) => ({ ...preset, counts: normalizeCounts(preset.counts) }));
   } catch {
     return [];
   }
+}
+
+export function normalizeCounts(counts: CardCounts): CardCounts {
+  return Object.fromEntries(CARD_RANKS.map((rank) => [rank, Math.max(0, Math.floor(Number(counts?.[rank]) || 0))]));
 }
 
 export function writePresets(presets: SavedPreset[]) {

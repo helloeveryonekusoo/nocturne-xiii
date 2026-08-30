@@ -151,7 +151,9 @@ function cleanName(value: unknown) {
 
 function cleanCounts(value: unknown) {
   const source = value && typeof value === 'object' ? value as Record<string, unknown> : {};
-  const counts: Record<number, number> = {};
+  const counts: Record<number, number> = {
+    0: Math.max(0, Math.min(20, Math.floor(Number(source['0']) || 0))),
+  };
   for (let rank = 1; rank <= 13; rank += 1) {
     counts[rank] = Math.max(0, Math.min(20, Math.floor(Number(source[String(rank)]) || 0)));
   }

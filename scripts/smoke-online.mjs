@@ -31,7 +31,7 @@ async function invoke(client, body) {
   return data;
 }
 
-const counts = Object.fromEntries(Array.from({ length: 13 }, (_, index) => [index + 1, index < 8 ? 2 : 1]));
+const counts = { 0: 1, ...Object.fromEntries(Array.from({ length: 13 }, (_, index) => [index + 1, index < 8 ? 2 : 1])) };
 const host = makeClient();
 const guest = makeClient();
 await Promise.all([signIn(host), signIn(guest)]);
@@ -70,7 +70,9 @@ const playable = drawn.view.players.find((player) => player.id === created.playe
 if (!playable) throw new Error('No playable card after drawing');
 const targeted = [2, 3, 5, 6, 8, 9].includes(playable.rank);
 const activeRevolution = playable.rank === 1 && drawn.view.rankOnePlayed >= 1;
-const choices = targeted || activeRevolution ? { targetId: 'player-2', guess: 13 } : undefined;
+const choices = playable.rank === 0
+  ? { declaredRank: 4 }
+  : targeted || activeRevolution ? { targetId: 'player-2', guess: 13 } : undefined;
 const played = await invoke(host, {
   action: 'command', code: created.code, commandId: crypto.randomUUID(), expectedVersion: drawn.view.version,
   command: { type: 'play', cardId: playable.id, choices },
@@ -178,4 +180,26 @@ if (thirdRevolution.view.rankOnePlayed !== 3 || thirdRevolution.view.pendingEffe
   throw new Error('A rank 1 after the second did not activate public execution');
 }
 
-console.log(`Online smoke test passed (rooms ${created.code}/${duelRoom.code}/${revolutionRoom.code}, version ${played.view.version})`);
+const jokerCounts = { 0: 6, ...Object.fromEntries(Array.from({ length: 13 }, (_, index) => [index + 1, 0])) };
+const jokerRoom = await invoke(host, { action: 'create_room', name: 'HOST', maxPlayers: 2, counts: jokerCounts });
+await invoke(guest, { action: 'join_room', name: 'GUEST', code: jokerRoom.code });
+const jokerLobby = await invoke(host, { action: 'snapshot', code: jokerRoom.code });
+const jokerStart = await invoke(host, {
+  action: 'command', code: jokerRoom.code, commandId: crypto.randomUUID(), expectedVersion: jokerLobby.lobby.version,
+  command: { type: 'start', counts: jokerCounts, maxPlayers: 2 },
+});
+const jokerDraw = await invoke(host, {
+  action: 'command', code: jokerRoom.code, commandId: crypto.randomUUID(), expectedVersion: jokerStart.view.version,
+  command: { type: 'draw', choice: 'one' },
+});
+const jokerCard = jokerDraw.view.players.find((player) => player.id === jokerRoom.playerId)?.ownHand?.find((card) => card.rank === 0);
+if (!jokerCard) throw new Error('The configured joker was not dealt');
+const jokerPlayed = await invoke(host, {
+  action: 'command', code: jokerRoom.code, commandId: crypto.randomUUID(), expectedVersion: jokerDraw.view.version,
+  command: { type: 'play', cardId: jokerCard.id, choices: { declaredRank: 11 } },
+});
+if (!jokerPlayed.view.events.some((event) => event.text.includes('「ジョーカー」を11'))) {
+  throw new Error('The joker declaration did not resolve online');
+}
+
+console.log(`Online smoke test passed (rooms ${created.code}/${duelRoom.code}/${revolutionRoom.code}/${jokerRoom.code}, version ${played.view.version})`);
