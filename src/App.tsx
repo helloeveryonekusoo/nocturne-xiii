@@ -25,10 +25,11 @@ const savedName = () => {
 function CardArtwork({ card, compact = false }: { card: Card; compact?: boolean }) {
   return (
     <>
-      <span className="card-rank">{card.rank}</span>
+      <span className="card-rank"><small>RANK</small>{card.rank}</span>
       <span className="card-sigil" aria-hidden="true">{SIGILS[card.rank]}</span>
       <span className="card-title">{CARD_NAMES[card.rank]}</span>
       {!compact && <span className="card-copy">{CARD_DESCRIPTIONS[card.rank]}</span>}
+      {!compact && <span className="card-index" aria-hidden="true">NOCTURNE · XIII</span>}
     </>
   );
 }
@@ -45,6 +46,7 @@ function CardFace({ card, onClick, disabled, compact = false }: {
       aria-label={`${card.rank} ${CARD_NAMES[card.rank]}`}
     >
       <CardArtwork card={card} compact={compact} />
+      {onClick && !disabled && !compact && <span className="card-action-hint">選んで使う</span>}
     </button>
   );
 }
@@ -96,6 +98,106 @@ export function TauntNotice({ event }: { event?: GameEvent }) {
   return visible ? <div className="taunt-screen" role="status"><span>忘れてやーんの</span></div> : null;
 }
 
+type MotionCue = {
+  id: string;
+  kind: 'draw' | 'play' | 'turn';
+  card?: Card;
+  label: string;
+};
+
+type MotionSnapshot = {
+  deckCount: number;
+  discardLength: number;
+  hand: Card[];
+  handCounts: Record<string, number>;
+  turnNumber: number;
+  turnPlayerId: string | null;
+};
+
+export function GameMotionLayer({ view, playerId }: { view: PlayerView; playerId: string }) {
+  const [cue, setCue] = useState<MotionCue | null>(null);
+  const previous = useRef<MotionSnapshot | null>(null);
+  const hideTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    const ownHand = view.players.find((player) => player.id === playerId)?.ownHand ?? [];
+    const current: MotionSnapshot = {
+      deckCount: view.deckCount,
+      discardLength: view.discard.length,
+      hand: ownHand,
+      handCounts: Object.fromEntries(view.players.map((player) => [player.id, player.handCount])),
+      turnNumber: view.turnNumber,
+      turnPlayerId: view.turnPlayerId,
+    };
+    const before = previous.current;
+    previous.current = current;
+    if (!before) return;
+
+    let nextCue: MotionCue | null = null;
+    if (current.discardLength > before.discardLength) {
+      const card = view.discard.at(-1);
+      if (card) nextCue = { id: `${view.version}-play-${card.id}`, kind: 'play', card, label: `${CARD_NAMES[card.rank]}を場へ` };
+    } else if (current.deckCount < before.deckCount) {
+      const card = ownHand.find((item) => !before.hand.some((previousCard) => previousCard.id === item.id));
+      const recipient = view.players.find((player) => player.handCount > (before.handCounts[player.id] ?? player.handCount));
+      nextCue = {
+        id: `${view.version}-draw-${view.deckCount}`,
+        kind: 'draw',
+        card,
+        label: recipient?.id === playerId ? '手札に加わった' : `${recipient?.name ?? 'プレイヤー'}がドロー`,
+      };
+    } else if (current.turnNumber !== before.turnNumber || current.turnPlayerId !== before.turnPlayerId) {
+      const turnPlayer = view.players.find((player) => player.id === current.turnPlayerId);
+      nextCue = {
+        id: `${view.version}-turn-${current.turnNumber}`,
+        kind: 'turn',
+        label: turnPlayer?.id === playerId ? 'あなたの手番' : `${turnPlayer?.name ?? ''}の手番`,
+      };
+    }
+
+    if (!nextCue) return;
+    if (hideTimer.current !== null) window.clearTimeout(hideTimer.current);
+    setCue(nextCue);
+    hideTimer.current = window.setTimeout(() => {
+      setCue(null);
+      hideTimer.current = null;
+    }, nextCue.kind === 'turn' ? 820 : 980);
+  }, [playerId, view]);
+
+  useEffect(() => () => {
+    if (hideTimer.current !== null) window.clearTimeout(hideTimer.current);
+  }, []);
+
+  if (!cue) return null;
+  if (cue.kind === 'turn') {
+    return <div className="turn-transition" role="status"><small>TURN {view.turnNumber}</small><strong>{cue.label}</strong></div>;
+  }
+  return (
+    <div className={`motion-layer motion-${cue.kind}`} aria-hidden="true">
+      <div className="motion-card" key={cue.id}>
+        {cue.card
+          ? <div className={`card-face motion-card-face rank-${cue.card.rank}`}><CardArtwork card={cue.card} compact /></div>
+          : <div className="motion-card-back"><span>XIII</span></div>}
+        <span className="motion-label">{cue.label}</span>
+      </div>
+    </div>
+  );
+}
+
+function PhaseTrack({ phase, isMyTurn }: { phase: PlayerView['phase']; isMyTurn: boolean }) {
+  const drawActive = phase === 'draw' || phase === 'scholar-select';
+  const playActive = phase === 'action' || phase === 'resolve';
+  return (
+    <div className={`phase-track ${isMyTurn ? 'is-mine' : ''}`} aria-label="手番の進行">
+      <span className={drawActive ? 'active' : playActive || phase === 'ended' ? 'done' : ''}><i>1</i>引く</span>
+      <b />
+      <span className={playActive ? 'active' : phase === 'ended' ? 'done' : ''}><i>2</i>使う</span>
+      <b />
+      <span className={phase === 'ended' ? 'active' : ''}><i>3</i>次の手番</span>
+    </div>
+  );
+}
+
 export default function App() {
   const [screen, setScreen] = useState<Screen>('home');
   const [name, setName] = useState(savedName);
@@ -141,6 +243,11 @@ export default function App() {
     if (graveSort === 'rank-desc') cards.sort((left, right) => right.rank - left.rank);
     return cards;
   }, [graveSort, view?.discard]);
+
+  useEffect(() => {
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+  }, [screen]);
 
   const acceptSnapshot = useCallback((snapshot: RoomSnapshot) => {
     if (snapshot.lobby) {
@@ -411,12 +518,14 @@ export default function App() {
                 <div className="join-row"><input inputMode="numeric" maxLength={4} placeholder="0000" value={joinCode} onChange={(event) => setJoinCode(event.target.value.replace(/\D/g, '').slice(0, 4))} aria-label="4桁のルームコード" /><button onClick={() => enterLobby('join')} disabled={joinCode.length !== 4 || busy}>部屋に入る</button></div>
               </div>
               <p className="microcopy">登録不要 · スマートフォン対応 · {onlineConfigured ? 'オンライン接続中' : '設定前はプレビュー対戦'}</p>
+              <div className="experience-flow" aria-label="ゲームの流れ"><span><i>01</i>一枚引く</span><b>→</b><span><i>02</i>読み合う</span><b>→</b><span><i>03</i>一枚使う</span></div>
             </div>
             <div className="table-preview" aria-label="対戦卓のイメージ">
               <div className="orbit" /><div className="orbit orbit-two" />
+              <p className="preview-kicker">THE TABLE AWAITS</p>
               <div className="player-chip chip-top"><span>●</span> KIRI</div><div className="player-chip chip-right"><span>●</span> AO</div>
               <div className="deck-stack"><small>残り</small><strong>16</strong></div>
-              <div className="card-fan">{[13, 7, 4].map((rank, index) => <CardFace key={rank} card={{ id: `demo-${rank}`, rank }} disabled compact={false} />)}</div>
+              <div className="card-fan">{[13, 7, 4].map((rank) => <CardFace key={rank} card={{ id: `demo-${rank}`, rank }} disabled compact={false} />)}</div>
               <div className="turn-pill"><span /> あなたの手番</div>
             </div>
           </section>
@@ -454,25 +563,27 @@ export default function App() {
         <main className="game-shell">
           <header className="game-header"><Brand onHome={goHome} /><div className="game-status"><span>ROOM {roomCode}</span><span>TURN {view.turnNumber}</span><button onClick={() => setRulesOpen(true)}>?</button></div></header>
           <section className="game-board">
+            <PhaseTrack phase={view.phase} isMyTurn={isMyTurn} />
             <div className="opponents">
               {view.players.filter((player) => player.id !== playerId).map((player) => (
                 <div className={`opponent ${player.eliminated ? 'eliminated' : ''} ${view.turnPlayerId === player.id ? 'active' : ''}`} key={player.id}>
-                  <div className="opponent-avatar">{player.name.slice(0, 1)}</div><div><strong>{player.name}</strong><small>{player.eliminated ? '脱落' : view.turnPlayerId === player.id ? '思案中…' : `${player.handCount}枚`}</small></div><div className="card-back">XIII</div>
+                  <div className="opponent-avatar">{player.name.slice(0, 1)}</div><div><strong>{player.name}</strong><small>{player.eliminated ? '脱落' : view.turnPlayerId === player.id ? '思案中…' : '待機中'}</small></div><div className="opponent-hand"><div className="card-back">XIII</div><span>{player.handCount}</span></div>
                 </div>
               ))}
             </div>
             <div className="board-center">
-              <div className="pile deck-pile"><span>山札</span><strong>{view.deckCount}</strong></div>
-              <div className="center-message"><small>{isMyTurn ? 'YOUR TURN' : 'WAITING'}</small><strong>{isMyTurn ? phaseLabel(view.phase) : `${view.players.find((player) => player.id === view.turnPlayerId)?.name ?? ''}の手番`}</strong><p>{latestEvent?.text}</p></div>
-              <button className="pile discard-pile" type="button" onClick={() => setGraveOpen(true)} disabled={!view.discard.length} aria-label={`墓地のカード${view.discard.length}枚をすべて見る`}><span>墓地</span>{view.discard.at(-1) ? <span className="card-face compact-card pile-card" aria-hidden="true"><CardArtwork card={view.discard.at(-1)!} compact /></span> : <strong>0</strong>}<small>{view.discard.length}枚 · タップで一覧</small></button>
+              <div className="pile-zone deck-zone"><small>DRAW PILE</small><div className="pile deck-pile"><i /><i /><span>山札</span><strong>{view.deckCount}</strong></div><p>残り {view.deckCount} 枚</p></div>
+              <div className="center-message"><small>{isMyTurn ? 'YOUR TURN' : 'TABLE STATUS'}</small><strong>{isMyTurn ? phaseLabel(view.phase) : `${view.players.find((player) => player.id === view.turnPlayerId)?.name ?? ''}の手番`}</strong><p className="latest-event">{latestEvent?.text ?? '夜会は静かに進んでいる。'}</p>{isMyTurn && <span className="action-beacon">次にできる操作を下に表示中</span>}</div>
+              <div className="pile-zone discard-zone"><small>GRAVEYARD</small><button className="pile discard-pile" type="button" onClick={() => setGraveOpen(true)} disabled={!view.discard.length} aria-label={`墓地のカード${view.discard.length}枚をすべて見る`}>{view.discard.at(-1) ? <span className="card-face compact-card pile-card" aria-hidden="true"><CardArtwork card={view.discard.at(-1)!} compact /></span> : <strong>0</strong>}<span>墓地を見る</span></button><p>{view.discard.length} 枚を公開</p></div>
             </div>
-            <div className="event-strip" aria-live="polite">{view.events.slice(-4).map((event) => <span key={event.id}>{event.text}</span>)}</div>
+            <div className="event-strip" aria-live="polite"><small>ACTION LOG</small>{view.events.slice(-3).map((event) => <span key={event.id}>{event.text}</span>)}</div>
+            <GameMotionLayer view={view} playerId={playerId} />
           </section>
           <section className="hand-dock">
             <div className="self-label"><span className="avatar">{(me?.name ?? name).slice(0, 1)}</span><div><strong>{me?.name ?? name}</strong><small>{me?.eliminated ? '脱落' : isMyTurn ? 'あなたの手番' : '待機中'}</small></div></div>
-            <div className="hand-cards">{(me?.ownHand ?? []).map((card) => <CardFace card={card} key={card.id} onClick={() => chooseCard(card)} disabled={busy || !isMyTurn || view.phase !== 'action' || me?.eliminated} />)}</div>
+            <div className="hand-zone"><div className="hand-heading"><small>YOUR HAND</small><span>{view.phase === 'action' && isMyTurn ? '使うカードを選択' : `${me?.ownHand?.length ?? 0}枚の手札`}</span></div><div className="hand-cards">{(me?.ownHand ?? []).map((card) => <CardFace card={card} key={card.id} onClick={() => chooseCard(card)} disabled={busy || !isMyTurn || view.phase !== 'action' || me?.eliminated} />)}</div></div>
             <div className="draw-actions">
-              {isMyTurn && view.phase === 'draw' ? <><button className="draw-one" onClick={() => draw('one')}>山札から<br/><strong>1枚引く</strong></button><button className="draw-three" onClick={() => draw('three')}><span>記憶している？</span><strong>3枚見る</strong></button></> : <div className="waiting-action"><span className="pulse" />{view.phase === 'action' && isMyTurn ? '使うカードを選択' : '夜会の進行を待っています'}</div>}
+              {isMyTurn && view.phase === 'draw' ? <><small className="action-caption">DRAW PHASE · どちらかを選択</small><button className="draw-one" onClick={() => draw('one')}><span><i>通常</i>山札から</span><strong>1枚引く <b>→</b></strong></button><button className="draw-three" onClick={() => draw('three')}><span><i>7の記憶</i>覚えているなら</span><strong>3枚見る <b>→</b></strong></button></> : <div className={`waiting-action ${isMyTurn ? 'is-mine' : ''}`}><span className="pulse" /><div><strong>{view.phase === 'action' && isMyTurn ? 'カードを選んでください' : '夜会の進行を待っています'}</strong><small>{view.phase === 'action' && isMyTurn ? '手札をタップすると効果を使えます' : '手番になると操作がここに表示されます'}</small></div></div>}
             </div>
           </section>
 

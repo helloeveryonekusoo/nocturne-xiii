@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import App, { CardRevealModal, TauntNotice } from './App';
+import type { PlayerView } from '../supabase/functions/_shared/game';
+import App, { CardRevealModal, GameMotionLayer, TauntNotice } from './App';
 
 afterEach(() => {
   cleanup();
@@ -59,5 +60,30 @@ describe('Nocturne XIII interface', () => {
     act(() => vi.advanceTimersByTime(300));
 
     expect(screen.queryByText('忘れてやーんの')).not.toBeInTheDocument();
+  });
+
+  it('keeps a draw motion visible long enough to follow the card', () => {
+    vi.useFakeTimers();
+    const baseView: PlayerView = {
+      id: 'game-1', version: 1,
+      players: [{ id: 'player-1', name: '旅人', seat: 0, handCount: 1, ownHand: [{ id: 'old-card', rank: 4 }], eliminated: false, connected: true }],
+      deckCount: 10, discard: [], rankOnePlayed: 0, reincarnationAvailable: true,
+      turnPlayerId: 'player-1', turnNumber: 1, phase: 'draw', pendingEffect: null,
+      pendingTargetCards: [], pendingTargetHandCount: 0, scholarCandidates: [], events: [], result: null,
+    };
+    const { rerender } = render(<GameMotionLayer view={baseView} playerId="player-1" />);
+    rerender(<GameMotionLayer view={{
+      ...baseView,
+      version: 2,
+      deckCount: 9,
+      phase: 'action',
+      players: [{ ...baseView.players[0], handCount: 2, ownHand: [...baseView.players[0].ownHand!, { id: 'drawn-card', rank: 7 }] }],
+    }} playerId="player-1" />);
+
+    expect(screen.getByText('手札に加わった')).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(979));
+    expect(screen.getByText('手札に加わった')).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(1));
+    expect(screen.queryByText('手札に加わった')).not.toBeInTheDocument();
   });
 });
