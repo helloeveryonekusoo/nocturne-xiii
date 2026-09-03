@@ -131,6 +131,21 @@ describe('game engine', () => {
     expect(projectForPlayer(next, 'player-1').rankOnePlayed).toBe(3);
   });
 
+  it('shows a rank 1 public-execution hand only to its user', () => {
+    const game = base();
+    game.phase = 'action';
+    game.rankOnePlayed = 1;
+    game.players[0].hand = [card(1), card(8, 'keep')];
+    game.players[1].hand = [card(4, 'target')];
+    const next = playCard(game, 'player-1', '1-x', { targetId: 'player-2' }, fixed);
+    const actorEvents = projectForPlayer(next, 'player-1').events;
+    const targetEvents = projectForPlayer(next, 'player-2').events;
+    const bystanderEvents = projectForPlayer(next, 'player-3').events;
+    expect(actorEvents.some((event) => event.revealTitle === '公開処刑')).toBe(true);
+    expect(targetEvents.some((event) => event.revealTitle === '公開処刑')).toBe(false);
+    expect(bystanderEvents.some((event) => event.revealTitle === '公開処刑')).toBe(false);
+  });
+
   it('uses the first rank 6 for a private face-to-face reveal without elimination', () => {
     const game = base();
     game.phase = 'action';
@@ -250,6 +265,20 @@ describe('game engine', () => {
     next = resolvePendingEffect(next, 'player-1', thirteenIndex);
     expect(next.players[1].eliminated).toBe(true);
     expect(next.reincarnationCard).not.toBeNull();
+  });
+
+  it('shows a rank 9 public-execution hand only to its user', () => {
+    const game = base();
+    game.phase = 'action';
+    game.players[0].hand = [card(9), card(8, 'keep')];
+    game.players[1].hand = [card(4, 'target')];
+    const next = playCard(game, 'player-1', '9-x', { targetId: 'player-2' }, fixed);
+    const actorEvents = projectForPlayer(next, 'player-1').events;
+    const targetEvents = projectForPlayer(next, 'player-2').events;
+    const bystanderEvents = projectForPlayer(next, 'player-3').events;
+    expect(actorEvents.some((event) => event.revealTitle === '公開処刑')).toBe(true);
+    expect(targetEvents.some((event) => event.revealTitle === '公開処刑')).toBe(false);
+    expect(bystanderEvents.some((event) => event.revealTitle === '公開処刑')).toBe(false);
   });
 
   it('processes rank 12 in seat order and replaces every unguarded hand', () => {

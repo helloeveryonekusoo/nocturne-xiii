@@ -147,6 +147,11 @@ if (secondRevolution.view.rankOnePlayed !== 2 || secondRevolution.view.pendingEf
   throw new Error('The second rank 1 did not activate public execution');
 }
 const revolutionActor = participant(revolutionPair, secondRevolution.view.pendingEffect.actorId);
+const revolutionObserver = revolutionPair.find((player) => player.playerId !== revolutionActor.playerId);
+const revolutionObserverView = await invoke(revolutionObserver.client, { action: 'snapshot', code: revolutionRoom.code });
+if (revolutionObserverView.view.events.some((event) => event.revealTitle === '公開処刑')) {
+  throw new Error('A rank 1 public-execution hand leaked to the other player');
+}
 const secondResolved = await invoke(revolutionActor.client, {
   action: 'command', code: revolutionRoom.code, commandId: crypto.randomUUID(), expectedVersion: secondRevolution.view.version,
   command: { type: 'resolve', discardIndex: 0 },
@@ -170,6 +175,33 @@ if (!jokerPlayed.view.events.some((event) => event.text.includes('「ジョー�
   throw new Error('The joker declaration did not resolve online');
 }
 
+const privateExecutionCounts = Object.fromEntries(Array.from({ length: 13 }, (_, index) => [index + 1, index === 8 ? 6 : 0]));
+const privateExecutionRoom = await invoke(host, { action: 'create_room', name: 'HOST', maxPlayers: 2, counts: privateExecutionCounts });
+const privateExecutionGuest = await invoke(guest, { action: 'join_room', name: 'GUEST', code: privateExecutionRoom.code });
+const privateExecutionPair = [
+  { client: host, playerId: privateExecutionRoom.playerId },
+  { client: guest, playerId: privateExecutionGuest.playerId },
+];
+const privateExecutionLobby = await invoke(host, { action: 'snapshot', code: privateExecutionRoom.code });
+const privateExecutionStart = await invoke(host, {
+  action: 'command', code: privateExecutionRoom.code, commandId: crypto.randomUUID(), expectedVersion: privateExecutionLobby.lobby.version,
+  command: { type: 'start', counts: privateExecutionCounts, maxPlayers: 2 },
+});
+const privateExecution = await playOnlyCardTurn(
+  privateExecutionRoom.code,
+  privateExecutionStart.view,
+  privateExecutionPair,
+  9,
+  (_view, targetId) => ({ targetId }),
+);
+const privateExecutionActor = participant(privateExecutionPair, privateExecution.view.pendingEffect?.actorId);
+const privateExecutionObserver = privateExecutionPair.find((player) => player.playerId !== privateExecutionActor.playerId);
+const privateExecutionObserverView = await invoke(privateExecutionObserver.client, { action: 'snapshot', code: privateExecutionRoom.code });
+if (!privateExecution.view.events.some((event) => event.revealTitle === '公開処刑')
+  || privateExecutionObserverView.view.events.some((event) => event.revealTitle === '公開処刑')) {
+  throw new Error('A rank 9 public-execution hand was not private to its user');
+}
+
 const concurrentGuests = [guest, makeClient(), makeClient(), makeClient()];
 await Promise.all(concurrentGuests.slice(1).map(signIn));
 const raceCodes = [];
@@ -185,4 +217,4 @@ for (let round = 0; round < 3; round += 1) {
   }
 }
 
-console.log(`Online smoke test passed (rooms ${created.code}/${duelRoom.code}/${revolutionRoom.code}/${jokerRoom.code}; concurrent ${raceCodes.join('/')}, version ${played.view.version})`);
+console.log(`Online smoke test passed (rooms ${created.code}/${duelRoom.code}/${revolutionRoom.code}/${jokerRoom.code}/${privateExecutionRoom.code}; concurrent ${raceCodes.join('/')}, version ${played.view.version})`);

@@ -273,7 +273,11 @@ function prepareDiscardEffect(
   state.pendingEffect = { kind, actorId: actor.id, targetId: target.id, blockReincarnation, protectFromElimination };
   state.phase = 'resolve';
   if (kind === 'public-execution') {
-    log(state, `${target.name}の手札が公開された。`, { reveal: copy(target.hand), revealTitle: '公開処刑' });
+    log(state, `${target.name}の手札を確認した。`, {
+      privateTo: actor.id,
+      reveal: copy(target.hand),
+      revealTitle: '公開処刑',
+    });
   }
   return true;
 }
@@ -620,7 +624,7 @@ export const CARD_NAMES: Record<number, string> = {
 
 export const CARD_DESCRIPTIONS: Record<number, string> = {
   0: '数値は10。使用時に9・13以外の階位を宣言し、その効果を使う。1・6の使用回数には数えない。',
-  1: '二枚目以降は公開処刑へ変わる。',
+  1: '二枚目以降は、使用者だけが相手の手札を見て一枚を処刑する。',
   2: '相手の階位を言い当てる。',
   3: 'ひとりの手札を自分だけが見る。',
   4: '次の実際の手番まで効果を受けない。',
@@ -628,7 +632,7 @@ export const CARD_DESCRIPTIONS: Record<number, string> = {
   6: '一枚目は密かに手札を見せ合う。二枚目以降は対決し、小さい方が脱落。同値なら続行。',
   7: '次の自分の手番で三枚から一枚を選べる。',
   8: 'ひとりと手札を交換する。',
-  9: '相手の二枚を公開し、一枚を処刑する。',
+  9: '使用者だけが相手の二枚を見て、一枚を処刑する。',
   10: '手札をすべて捨て、新しい一枚を引く。',
   11: '次のプレイヤーの手番を飛ばす。',
   12: '自分以外の手札を順に生まれ変わらせる。',
